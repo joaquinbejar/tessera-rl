@@ -639,6 +639,7 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
         false,
         pool.options().chunk_size.get(),
         &super::ResetSourceRecord::Fresh,
+        false,
     );
     let sum = checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());

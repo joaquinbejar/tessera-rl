@@ -18,9 +18,7 @@ use crate::pool::EnvPool;
 use crate::record::{DecodedRecord, PoolContext};
 use crate::validate::ActionInput;
 
-use super::format::EventTag as Tag;
 use super::reader::{Event, Ids, Replay};
-use super::v1_fields::not_yet;
 use super::{DivergenceKind, ReplayError, ResetSourceRecord};
 
 /// What a replay checked.
@@ -291,6 +289,15 @@ impl Replay<'_> {
             .into());
         }
         self.check_parts::<E, M>(&pool.cfg, &pool.options, pool.action_heads())?;
+        // ADR-0081 item 7.5: a file with a curriculum replays into a pool
+        // with targets, where replay applies its tag 7 events and no
+        // curriculum runs; a file without one into a pool without targets.
+        if self.header.has_curriculum != pool.targets().is_some() {
+            return Err(PersistError::Incompatible {
+                field: "curriculum",
+            }
+            .into());
+        }
         // ADR-0079 item 6 (erratum B2): the caller builds the pool with the
         // recorded map; replay verifies it before any event.
         self.check_policy_map(pool.policy_map())?;
@@ -393,9 +400,6 @@ impl Replay<'_> {
             || !same(self.header.continuous_heads, continuous)
         {
             return incompatible("action_layout");
-        }
-        if <<E::Header as RecordLayout>::Adaptive as Canonical>::ENCODED_LEN != 0 {
-            return Err(ReplayError::AdaptiveUnsupported);
         }
         Ok(())
     }
@@ -500,8 +504,10 @@ impl Replay<'_> {
                 PoolContext {
                     branch_counter,
                     reset_source,
-                    // Replays refuse pools with transforms (ADR-0078 item 8).
-                    adaptive: crate::adaptive::AdaptiveContext::default(),
+                    // The pool's own: replays refuse transforms (ADR-0078
+                    // item 8), and curriculum targets change only through
+                    // tag 7 events (ADR-0081 item 7), not keyframes.
+                    adaptive: pool.pool_context()?.adaptive,
                     // The recorded map's digest (ADR-0079 item 6): the pool's
                     // map was checked against it before the first event.
                     policy_map: self.header.policy_map_digest()?,
@@ -509,7 +515,13 @@ impl Replay<'_> {
                 &ids,
                 (records, assignments),
             ),
-            Event::Adaptive { .. } => Err(not_yet(Tag::Adaptive)),
+            Event::Adaptive { value_len, entries } => {
+                // Not a call (the writer counts none): the targets the next
+                // resets copy (ADR-0081 item 7.2).
+                let changes = adaptive_changes::<E>(index, value_len, &entries)?;
+                pool.set_targets(&changes)?;
+                Ok(())
+            }
             // The first view was checked against the pool before any event
             // (`check_league`); a later one replaces the view as the
             // recorded barrier did (ADR-0088 section 8).
@@ -726,6 +738,30 @@ where
         }
     }
     Ok(())
+}
+
+/// The changes of a tag 7 `Adaptive` event (ADR-0081 item 7.1): each
+/// entry's canonical bytes decoded as the environment's adaptive values.
+pub(super) fn adaptive_changes<E: Environment>(
+    index: u64,
+    value_len: usize,
+    entries: &[(u32, &[u8])],
+) -> Result<Vec<(u32, tessera_rl_core::Adaptive<E>)>, ReplayError> {
+    let malformed = |field| ReplayError::Malformed {
+        event_index: index,
+        field,
+    };
+    if value_len != <tessera_rl_core::Adaptive<E> as Canonical>::ENCODED_LEN {
+        return Err(malformed("adaptive value length"));
+    }
+    entries
+        .iter()
+        .map(|&(id, bytes)| {
+            decode_from_slice::<tessera_rl_core::Adaptive<E>>(bytes)
+                .map(|value| (id, value))
+                .map_err(|_| malformed("adaptive values"))
+        })
+        .collect()
 }
 
 /// Records the outcome of a re-issued call: a success, a poison (the next

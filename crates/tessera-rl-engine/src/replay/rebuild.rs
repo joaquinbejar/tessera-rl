@@ -97,6 +97,9 @@ impl Replay<'_> {
         let cfg = decode_canonical::<E::Config>(self.header.config)?;
         let options = self.pool_options()?;
         let pool = build(cfg, options)?;
+        // The caller builds the pool (with targets for a file with a
+        // curriculum, ADR-0081 item 7.5); `check_pool` refuses a mismatch
+        // before any event, as for the policy map (ADR-0079 item 6).
         self.check_pool(&pool)?;
         Ok(pool)
     }

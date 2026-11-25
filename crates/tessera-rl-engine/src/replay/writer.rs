@@ -11,7 +11,7 @@
 use std::io::Write;
 
 use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
-use tessera_rl_core::encoding::{Canonical, HashSink, Sink, encode_to_vec};
+use tessera_rl_core::encoding::{HashSink, Sink, encode_to_vec};
 use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, Validate};
 
 use crate::archive::ResetSource;
@@ -155,8 +155,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`ReplayError::AdaptiveUnsupported`] for a pool with adaptive
-    /// config values, a [`ReplayError::Persist`] for a header the pool cannot
+    /// Returns a [`ReplayError::Persist`] for a header the pool cannot
     /// describe (for example a `same-platform` environment built without
     /// `TESSERA_BUILD_ID`), [`ReplayError::Engine`] on a poisoned pool, or
     /// [`ReplayError::Io`].
@@ -165,9 +164,9 @@ where
         out: W,
         options: ReplayWriterOptions,
     ) -> Result<Self, ReplayError> {
-        if <<E::Header as RecordLayout>::Adaptive as Canonical>::ENCODED_LEN != 0 {
-            return Err(ReplayError::AdaptiveUnsupported);
-        }
+        // Adaptive values change only through curriculum targets (ADR-0081
+        // item 7.4): a pool with targets writes `has_curriculum` 1 and its
+        // changes as tag 7 events; one without keeps its values fixed.
         if options.outputs_hash {
             return Err(ReplayError::Unsupported {
                 feature: "outputs hashes in first-party replay files",
@@ -202,6 +201,16 @@ where
             recorder.emit_body(EventTag::League)?;
         }
         recorder.keyframe(None)?;
+        // The targets at recording start, so the file does not depend on
+        // what the replaying pool's targets were (ADR-0081 item 7): every
+        // slot, once. A pool without targets writes nothing here.
+        if let Some(n) = recorder.pool.targets().map(<[_]>::len) {
+            let ids: Vec<u32> = (0..n).filter_map(|i| u32::try_from(i).ok()).collect();
+            let entries = recorder.target_entries(&ids);
+            recorder.body.clear();
+            super::v1_fields::push_adaptive(&mut recorder.body, &entries);
+            recorder.emit_body(EventTag::Adaptive)?;
+        }
         Ok(recorder)
     }
 
@@ -387,6 +396,43 @@ where
         Ok(self.pool.outputs()?)
     }
 
+    /// [`EnvPool::set_targets`], logged as a tag 7 `Adaptive` event (the
+    /// targets a curriculum outside the engine set, ADR-0081 item 5.5): the
+    /// listed slots, sorted, each once with its last value.
+    ///
+    /// # Errors
+    ///
+    /// As [`Recorder::reset_all`].
+    pub fn set_targets(
+        &mut self,
+        changes: &[(u32, tessera_rl_core::Adaptive<E>)],
+    ) -> Result<(), ReplayError> {
+        self.open()?;
+        self.pool.set_targets(changes)?;
+        let mut ids: Vec<u32> = changes.iter().map(|&(id, _)| id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let entries = self.target_entries(&ids);
+        self.body.clear();
+        super::v1_fields::push_adaptive(&mut self.body, &entries);
+        // Not a call: it changes no record (ADR-0081 item 7.2).
+        self.emit_body(EventTag::Adaptive)
+    }
+
+    /// The canonical current targets of `ids` (ascending).
+    fn target_entries(&self, ids: &[u32]) -> Vec<(u32, Vec<u8>)> {
+        let targets = self.pool.targets().unwrap_or(&[]);
+        ids.iter()
+            .filter_map(|&id| {
+                let value = targets.get(usize::try_from(id).ok()?)?;
+                Some((id, encode_to_vec(value)))
+            })
+            .collect()
+    }
+
     /// Writes the trailer: a final checkpoint (unless the pool was poisoned
     /// or the last event already is one), then the end event. Returns the
     /// writer, flushed.
@@ -486,8 +532,9 @@ where
 
     /// [`EnvPool::epoch_barrier`], logged: a league whose view changed
     /// (its digest, kinds or table, compared canonically) writes a
-    /// `League` event with the new view (ADR-0088 section 8, erratum 3).
-    /// Not a logged call: it counts toward neither keyframes nor
+    /// `League` event with the new view (ADR-0088 section 8, erratum 3),
+    /// and a curriculum that changed targets a tag 7 `Adaptive` event
+    /// (ADR-0081 item 7.2). Not a logged call: it counts toward neither keyframes nor
     /// checkpoints. A failed barrier writes nothing.
     ///
     /// # Errors
@@ -510,6 +557,19 @@ where
             if self.body != before {
                 self.emit_body(EventTag::League)?;
             }
+        }
+        // A curriculum that changed any target writes a tag 7 `Adaptive`
+        // event with the changed slots and their new targets (ADR-0081
+        // item 7.2); a barrier that changed none writes nothing.
+        let changed = report
+            .curriculum
+            .as_ref()
+            .map_or(&[][..], |c| c.ids.as_slice());
+        if !changed.is_empty() {
+            let entries = self.target_entries(changed);
+            self.body.clear();
+            super::v1_fields::push_adaptive(&mut self.body, &entries);
+            self.emit_body(EventTag::Adaptive)?;
         }
         Ok(report)
     }
@@ -637,7 +697,7 @@ where
         &pool.options,
         pool.action_heads(),
         pool.policy_map(),
-        pool.league.is_some(),
+        (pool.targets().is_some(), pool.league.is_some()),
         0,
         &source,
     )
@@ -651,7 +711,7 @@ pub(super) fn header_from<E, M>(
     options: &crate::options::PoolOptions,
     (discrete, continuous): (usize, usize),
     policy_map: &crate::policy::PolicyMap,
-    has_league: bool,
+    (has_curriculum, has_league): (bool, bool),
     flags: u8,
     source: &super::ResetSourceRecord,
 ) -> Result<Vec<u8>, ReplayError>
@@ -692,7 +752,7 @@ where
     // flags, then host_protocol, notifies, refuses: 0 for a first-party pool.
     out.extend_from_slice(&[flags, 0, 0, 0]);
     let chunk = options.chunk_size.get();
-    super::v1_fields::push_extension(&mut out, &codes, has_league, chunk, source);
+    super::v1_fields::push_extension(&mut out, &codes, has_league, chunk, source, has_curriculum);
     let sum = tessera_rl_core::encoding::checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

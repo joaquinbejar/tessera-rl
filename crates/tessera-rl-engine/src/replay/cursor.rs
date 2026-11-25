@@ -58,6 +58,9 @@ pub struct ReplayPoint {
 pub struct ReplayCursor {
     /// The byte offset of every event's frame; event `i` is at position `i`.
     offsets: Vec<usize>,
+    /// The positions of the tag 7 `Adaptive` events, in file order, from the
+    /// same index pass: a seek replays only these (ADR-0081 item 7).
+    adaptive: Vec<usize>,
     /// The position of the next event to apply.
     pos: usize,
     state: State,
@@ -96,6 +99,9 @@ impl ReplayCursor {
         })
     }
 }
+
+/// Every slot's target, as `(slot, value)`.
+type SlotTargets<E> = Vec<(u32, tessera_rl_core::Adaptive<E>)>;
 
 /// The refusal of a seek target.
 const fn not_seekable() -> ReplayError {
@@ -164,11 +170,22 @@ impl Replay<'_> {
         self.check_pool(pool)?;
         self.check_archives(archive)?;
         let offsets = self.event_offsets()?;
+        let adaptive = if self.header.has_curriculum {
+            offsets
+                .iter()
+                .enumerate()
+                .filter(|&(_, &o)| self.tag_at(o) == Some(EventTag::Adaptive as u8))
+                .map(|(pos, _)| pos)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let (events_len, input_len) = self.shape();
         let mut state = State::new();
         state.archive = archive.map(AnyArchive::new);
         Ok(ReplayCursor {
             offsets,
+            adaptive,
             pos: 0,
             state,
             done: false,
@@ -403,6 +420,11 @@ impl Replay<'_> {
         // Unreachable after check_archives: kept as defence in depth (rev, #363 B r2).
         check_source(&reset_source, given)?;
         let records = self.decode_records::<E>(index, records)?;
+        // The targets at the keyframe (ADR-0081 item 7): keyframes do not
+        // hold them, and they change only through tag 7 events, so they are
+        // the config's values with every earlier tag 7 applied in file
+        // order. Rebuilt before any write.
+        let targets = self.targets_before::<E, M>(pool, cur, keyframe_event)?;
         pool.import_all(&records)
             .map_err(|_| st.diverged(index, DivergenceKind::KeyframeRejected, None))?;
         if let (Some(view), Some(league)) = (view, pool.league.as_mut()) {
@@ -423,10 +445,11 @@ impl Replay<'_> {
                 branch_counter,
                 reset_source,
                 // Replays refuse pools with transforms (ADR-0078 item 8); a
-                // league file's keyframe carries the assignments.
+                // league file's keyframe carries the assignments, and the
+                // targets are set just below.
                 adaptive: crate::adaptive::AdaptiveContext {
                     league,
-                    ..crate::adaptive::AdaptiveContext::default()
+                    ..pool.pool_context()?.adaptive
                 },
                 // The recorded map's digest (ADR-0079 item 6): a pool with
                 // another map is refused by `check_context`, before any write.
@@ -434,6 +457,9 @@ impl Replay<'_> {
             },
             archive_ref::<E>(&st),
         )?;
+        if let Some(targets) = targets {
+            pool.set_targets(&targets)?;
+        }
         st.summary.keyframes = 1;
         st.summary.started_at = Some(index);
         let next = ReplayCursor::after(pos)?;
@@ -442,6 +468,54 @@ impl Replay<'_> {
         cur.pos = next;
         cur.done = false;
         Ok(())
+    }
+
+    /// The targets of every slot just before event `before`: the config's
+    /// adaptive values with each earlier tag 7 event applied, in file order;
+    /// `None` for a file without a curriculum.
+    fn targets_before<E, M>(
+        &self,
+        pool: &EnvPool<E, M>,
+        cur: &ReplayCursor,
+        before: u64,
+    ) -> Result<Option<SlotTargets<E>>, ReplayError>
+    where
+        E: Persist + Validate,
+        E::Config: CanonicalConfig + Sync,
+        E::Header: Send,
+        E::State: Send,
+        M: PersistMask<E>,
+        <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    {
+        if !self.header.has_curriculum {
+            return Ok(None);
+        }
+        let initial =
+            <tessera_rl_core::Adaptive<E> as AdaptiveValues<E::Config>>::from_config(&pool.cfg);
+        let n = usize::try_from(self.header.num_envs).map_err(|_| not_seekable())?;
+        let mut values = vec![initial; n];
+        // Only the tag 7 events before `before`, through the index.
+        for &pos in cur.adaptive.iter().take_while(|&&p| u64_of(p) < before) {
+            let offset = *cur.offsets.get(pos).ok_or_else(not_seekable)?;
+            let Some(item) = self.events_at(offset, u64_of(pos)).next() else {
+                return Err(not_seekable());
+            };
+            let (index, event) = item?;
+            if let Event::Adaptive { value_len, entries } = event {
+                for (id, value) in super::run::adaptive_changes::<E>(index, value_len, &entries)? {
+                    if let Some(slot) = usize::try_from(id).ok().and_then(|i| values.get_mut(i)) {
+                        *slot = value;
+                    }
+                }
+            }
+        }
+        Ok(Some(
+            values
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, v)| Some((u32::try_from(i).ok()?, v)))
+                .collect(),
+        ))
     }
 
     /// Replays the file into `pool` as [`Replay::run`] does, calling

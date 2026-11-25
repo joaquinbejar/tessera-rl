@@ -409,6 +409,12 @@ impl Replay<'_> {
             return incompatible("host_protocol");
         };
         self.check_v1(pool.options().chunk_size.get())?;
+        // Host pools have no curriculum targets (ADR-0081 item 7).
+        if self.header.has_curriculum {
+            return Err(ReplayError::Unsupported {
+                feature: "curricula in host replay files (ADR-0081)",
+            });
+        }
         if self.header.has_league {
             return Err(ReplayError::Unsupported {
                 feature: "leagues in host replay files (ADR-0088)",
