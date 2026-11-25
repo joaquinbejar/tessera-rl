@@ -102,6 +102,19 @@ def fingerprint(name: str) -> str:
             "flatten": hashlib.sha256(flat.encode()).hexdigest(),
         }
         params = asdict(masked_hyper(name, protocol(name)["total_steps"]))
+    elif protocol(name)["tier"] == "T1n":
+        import inspect  # noqa: PLC0415
+
+        import learning_normalized as ln  # noqa: PLC0415
+
+        # Its own scope (#530): the T1n module, and only the sources it
+        # imports, so neither the T1 path nor #564's _FlatVector is in it.
+        imported = "\n".join(inspect.getsource(f) for f in ln.IMPORTED)
+        sources = {
+            "learning_normalized": hashlib.sha256(pathlib.Path(ln.__file__).read_bytes()).hexdigest(),
+            "imported": hashlib.sha256(imported.encode()).hexdigest(),
+        }
+        params = asdict(normalized_hyper(name, protocol(name)["total_steps"]))
     elif protocol(name)["tier"] == "T3b":
         import inspect  # noqa: PLC0415
 
@@ -142,6 +155,26 @@ def continuous_hyper(name: str, total_steps: int):
     import learning_continuous as lc  # noqa: PLC0415
 
     return lc.ContinuousHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def normalized_hyper(name: str, total_steps: int):
+    import learning_normalized as ln  # noqa: PLC0415
+
+    return ln.NormalizedHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def train_normalized(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
+    """One training run of a tier T1n protocol (discrete PPO with
+    observation and reward normalization, ``learning_normalized``, #530).
+    Kept apart from ``train`` so the T1 training path, and with it the T1
+    fingerprints, do not change."""
+    import learning_normalized as ln  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    if p["tier"] != "T1n":
+        raise ValueError(f"{name} is tier {p['tier']}, not T1n")
+    return ln.train(p["env"], seed, normalized_hyper(name, total_steps), eval_episodes, rt.EVAL_SEED_BASE)
 
 
 def masked_hyper(name: str, total_steps: int):

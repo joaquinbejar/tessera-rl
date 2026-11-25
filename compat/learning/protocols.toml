@@ -20,7 +20,8 @@
 # Protocols without a calibration have no nightly gate yet (the owner's
 # rule: an environment that does not learn at an affordable budget ships its
 # protocol without one). At 150k steps:
-# - MountainCar scores -200, the same as a random policy (sparse reward).
+# - MountainCar scores -200, the same as a random policy (sparse reward);
+#   it moved to the normalized tier T1n (#530).
 # - Grid scores -0.9 on every seed against -1.0 for random: 1 goal in 20
 #   evaluation episodes. It passes the numeric learns check, but that is not
 #   learning to reach the goal.
@@ -42,18 +43,19 @@ adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}
 
-# No calibration, so no nightly gate (#370, decided): at these CleanRL
-# defaults the pilot scored -200 on every seed, the same as a random policy.
-# RL Zoo's working PPO setup (hyperparams/ppo.yml at v2.9.2, MountainCar-v0)
-# needs observation and reward normalization, which the T1 trainer lacks;
-# adding it there would invalidate the calibrated T1 protocols. A separate
-# normalized T1 trainer is #530.
+# Tier T1n (#530): at the T1 CleanRL defaults the pilot scored -200 on every
+# seed, the same as a random policy (#370). This is RL Zoo's working PPO
+# setup (hyperparams/ppo.yml at v2.9.2, MountainCar-v0: normalize, 16 envs,
+# n_steps 16, gae_lambda 0.98, 4 epochs, ent_coef 0, 1e6 steps; batch_size 64,
+# so 4 minibatches of 256) on the normalized trainer, learning_normalized;
+# the rest are SB3 PPO defaults (NormalizedHyper). A new protocol: no T1
+# calibration carries over.
 [mountaincar]
 env = "tessera/MountainCar-v1"
-tier = "T1"
+tier = "T1n"
 adapter = "tessera_rl.gym (SAME_STEP)"
-total_steps = 150000
-hyper = {}
+total_steps = 1000000
+hyper = { num_envs = 16, num_steps = 16, gae_lambda = 0.98, update_epochs = 4, ent_coef = 0.0, num_minibatches = 4 }
 
 # No calibration, so no nightly gate (#370, decided): at these CleanRL
 # defaults the xaskar calibration was degenerate (-0.9 on every seed).

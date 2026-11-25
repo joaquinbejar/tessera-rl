@@ -197,7 +197,9 @@ def _train(args, seeds: list[int]) -> list[dict]:
             import learning_protocols
 
             tier = learning_protocols.protocol(PROTOCOL)["tier"]
-            if tier == "T2":
+            if tier == "T1n":
+                r = learning_protocols.train_normalized(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+            elif tier == "T2":
                 r = learning_protocols.train_continuous(PROTOCOL, seed, args.total_steps, args.eval_episodes)
             elif tier == "T3a":
                 r = learning_protocols.train_masked(PROTOCOL, seed, args.total_steps, args.eval_episodes)
