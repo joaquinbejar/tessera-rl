@@ -287,7 +287,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage ring id_buffers live_model waiter watch_slot
         env:
-          RUSTFLAGS: --cfg loom
+          # Replaces the workflow's -D warnings, so it is restated here.
+          RUSTFLAGS: --cfg loom -D warnings
           LOOM_MAX_PREEMPTIONS: "3"
           CARGO_TARGET_DIR: target/loom
 

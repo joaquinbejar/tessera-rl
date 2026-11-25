@@ -86,7 +86,10 @@ jobs:
               tree="$cache/src-$sha"
               rm -rf "$tree"
               git worktree add --detach "$tree" "$sha"
-              (cd "$tree" && CARGO_TARGET_DIR="$cache/target" cargo build -q --release --locked -p tessera-rl-bench-runner)
+              # -D warnings for the head only: a warning in an accepted base
+              # (built with today's toolchain) must not stop the night.
+              flags=$([ "$side" = head ] && echo "-D warnings" || true)
+              (cd "$tree" && RUSTFLAGS="$flags" CARGO_TARGET_DIR="$cache/target" cargo build -q --release --locked -p tessera-rl-bench-runner)
               mkdir -p "$cache/$sha"
               cp "$cache/target/release/tessera-rl-bench-runner" "$bin"
               git worktree remove --force "$tree"
