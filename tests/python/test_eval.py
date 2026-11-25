@@ -143,3 +143,24 @@ def test_eval_cli_writes_the_report(tmp_path):
     assert [r["episodes"] for r in report["opponents"]] == [3]
     assert report["setup"]["policy"] == "eval_policies:stay"
     assert set(report["provenance"]) >= {"git", "python", "tessera_rl", "numpy"}
+
+
+def test_eval_play_submits_the_external_rows():
+    """The External callable's actions are what the opponent slot plays: the
+    state after an episode equals a hand loop that submits them."""
+
+    def build():
+        return tessera_rl.make(DUEL, num_envs=1, seed=0, workers=0, auto_reset="disabled", outputs="owned",
+                               policy_map={1: "external"}, **KW)
+
+    a = build()
+    tev._play(a, pol.stay, pol.down, SEEDS[0], (0,), (1,), list(a.action_nvec))
+    b = build()
+    step = b.reset(seed=SEEDS[0])
+    while True:
+        step = b.step(np.array([[1, 2]], dtype=np.int32))
+        if bool(step.episode_terminated[0]) or bool(step.episode_truncated[0]):
+            break
+    assert a.state_hash(0) == b.state_hash(0)
+    a.close()
+    b.close()
