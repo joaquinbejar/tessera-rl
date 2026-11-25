@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly facade-api facade-api-bless py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -41,7 +41,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels py-typecheck dashboard-check simd-disasm fuzz-check
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly facade-api py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels py-typecheck dashboard-check simd-disasm fuzz-check
 
 # The audited ONNX Runtime version read against the real library (ADR-0057).
 # ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
@@ -117,6 +117,16 @@ pyffi-api-if-nightly:
 	else \
 	  echo "pyffi-api: skipped (no nightly toolchain)"; \
 	fi
+
+# ADR-0094 item 7 (#642): the facade's public API against the committed
+# api/tessera-rl.api, from rustdoc's JSON on the pinned toolchain
+# (RUSTC_BOOTSTRAP=1 for that rustdoc only). A diff fails: review it, then
+# `make facade-api-bless`.
+facade-api:
+	python3 scripts/check_facade_api.py check
+
+facade-api-bless:
+	python3 scripts/check_facade_api.py bless
 
 # ADR-0041 callouts: only ffi::capi calls the C API, and every call that
 # can run Python code is a callout (a source lint, not a proof).

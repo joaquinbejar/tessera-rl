@@ -17,6 +17,11 @@ reviewed tree: the frozen SHA.
       or justify its omission in the release PR. `python3
       scripts/changelog_draft.py <last tag>` prints a draft to start from
       (SPEC 20.1, #350).
+- [ ] Breaking changes since the last release (ADR-0094 item 7): none to
+      the stable surface, or this is a major release. `make facade-api` is
+      green, and `git diff <last tag> -- api/tessera-rl.api` lists what the
+      facade's public API changed since then: every removed or changed line
+      is a candidate break, to name in the CHANGELOG.
 - [ ] The CHANGELOG heading carries the actual release date
       (`## [<version>] - <YYYY-MM-DD>`). If the release slips, the last PR before
       the freeze corrects it. Nothing changes the tree after the freeze.
