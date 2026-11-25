@@ -40,7 +40,20 @@ jobs:
     # an overlap with work that starts later.
     runs-on: [self-hosted, m4]
     timeout-minutes: 5
+    # The commit and its time for the reproducible SBOMs (#654): the legs'
+    # images have no git, so they are derived here and passed to every leg.
+    outputs:
+      commit: ${{ steps.rev.outputs.commit }}
+      epoch: ${{ steps.rev.outputs.epoch }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: rev
+        name: The commit and its time
+        run: |
+          epoch="$(git log -1 --format=%ct "$GITHUB_SHA")"
+          echo "commit $GITHUB_SHA epoch $epoch"
+          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
       - name: Refuse while other runs of this repository are active
         env:
           TOKEN: ${{ github.token }}
@@ -89,6 +102,8 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
       TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,6 +163,8 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
       # The host example wheel's checks on aarch64 Linux (#313): CI runs them
       # on x86-64 only (make py-test-orderbook).
       TESSERA_WHEEL_ORDERBOOK: "1"
@@ -172,12 +189,14 @@ jobs:
             determinism.json
 
   macos:
-    needs: linux
+    needs: [preflight, linux]
     name: W0 (aarch64-apple-darwin)
     runs-on: [self-hosted, m4]
     timeout-minutes: 90
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
       # The host example wheel's checks on macOS arm64 (#313).
       TESSERA_WHEEL_ORDERBOOK: "1"
     steps:
@@ -202,7 +221,7 @@ jobs:
   # of the pinned version, and with none the evaluator raises the typed
   # missing-library error, which wheel_job.sh's onnx smoke asserts.
   musl-x86_64:
-    needs: linux
+    needs: [preflight, linux]
     name: W0 (x86_64-unknown-linux-musl)
     runs-on: [self-hosted, xaskar]
     timeout-minutes: 90
@@ -217,6 +236,8 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
       # The FP-traps flag stays unset: musl has no feenableexcept, so the
       # unmasked FP boundary scenario cannot run there (measured on the
       # musllinux_1_2 image, #350).
@@ -255,6 +276,8 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
       # The FP-traps flag stays unset: aarch64 does not implement trapped FP
       # exceptions, as on the manylinux aarch64 leg.
     steps:
@@ -291,6 +314,8 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
       # x86-64 implements trapped FP exceptions (fp_child.py uses
       # _controlfp_s on Windows): the unmasked FP boundary test must check
       # the enables, never skip (#225).

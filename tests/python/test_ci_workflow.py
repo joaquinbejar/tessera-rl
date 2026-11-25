@@ -217,3 +217,13 @@ def test_ci_workflow_can_be_dispatched_for_the_windows_jobs():
 def test_ci_only_the_windows_jobs_are_hosted():
     hosted = sorted(j for j in JOBS if "self-hosted" not in _runs_on(j))
     assert hosted == sorted(WINDOWS_JOBS), hosted
+
+
+def test_ci_windows_python_computes_the_sbom_inputs_with_git_before_the_wheel_job():
+    # #654: wheel_job.sh needs the commit and its time; the hosted checkout has .git.
+    job = JOBS["windows-python"]
+    step = re.search(r"^      - name: The commit and its time\n        run: \|\n((?:          .*\n)+)", job, re.M)
+    assert step, job
+    assert 'echo "WHEEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"' in step.group(1)
+    assert 'echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"' in step.group(1)
+    assert job.index("actions/checkout@") < job.index("The commit and its time") < job.index("scripts/wheel_job.sh")
