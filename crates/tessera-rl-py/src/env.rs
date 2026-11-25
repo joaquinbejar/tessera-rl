@@ -284,6 +284,26 @@ pub(crate) trait PoolOps: Send {
     fn step(&mut self, actions: ActionInput<'_>) -> Result<(), BindError>;
     /// The last call's outputs; refused on a poisoned pool.
     fn outputs(&self) -> Result<Owned, BindError>;
+    /// Copies the last call's outputs into `dst` without allocating, for
+    /// the XLA FFI path (ADR-0095 point 5). `dst` holds one buffer per
+    /// observation leaf, then rewards (`f32` little-endian), agent
+    /// terminated, agent truncated, alive, acting (one byte per flag),
+    /// slot generations (`u32` little-endian), episode terminated, episode
+    /// truncated and, with masks, the masks; each exactly as long as the
+    /// matching [`Owned`] field. The copy happens inside the caller's
+    /// admitted section, so within the outputs' borrow window. Sync mode
+    /// only: the split-phase modes refuse it. A pool with privileged state
+    /// (ADR-0079) is refused too: the XLA FFI path exports no privileged
+    /// leaves.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the XLA FFI handler of #369 head B calls it")
+    )]
+    fn outputs_into(&self, _dst: &mut [&mut [u8]]) -> Result<(), BindError> {
+        Err(BindError::Argument(
+            "outputs_into is available in sync mode only".to_owned(),
+        ))
+    }
     /// The shared output storage, for borrowed views.
     fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage>;
     /// The storage for new borrowed views: a view made on a poisoned pool would
@@ -849,6 +869,79 @@ where
                 .map_while(|leaf| out.privileged_state(leaf).map(<[u8]>::to_vec))
                 .collect(),
         })
+    }
+
+    fn outputs_into(&self, dst: &mut [&mut [u8]]) -> Result<(), BindError> {
+        let out = self.pool.outputs()?;
+        if out.privileged_state(0).is_some() {
+            return Err(BindError::Argument(
+                "outputs_into does not export privileged state".to_owned(),
+            ));
+        }
+        let leaves = (0..MAX_LEAVES)
+            .map_while(|leaf| out.observation(leaf))
+            .count();
+        let masks = out.masks();
+        let want = leaves + 8 + usize::from(!masks.is_empty());
+        if dst.len() != want {
+            return Err(BindError::Argument(format!(
+                "outputs_into needs {want} buffers, got {}",
+                dst.len()
+            )));
+        }
+        let mut dst = dst.iter_mut();
+        let mut next = |len: usize, what: &str| -> Result<&mut [u8], BindError> {
+            let buf = dst.next().map(|b| &mut **b).unwrap_or_default();
+            if buf.len() == len {
+                Ok(buf)
+            } else {
+                Err(BindError::Argument(format!(
+                    "outputs_into: {what} needs {len} bytes, got {}",
+                    buf.len()
+                )))
+            }
+        };
+        for leaf in 0..leaves {
+            let src = out.observation(leaf).unwrap_or_default();
+            next(src.len(), "an observation leaf")?.copy_from_slice(src);
+        }
+        let rewards = out.rewards();
+        let buf = next(rewards.len() * 4, "rewards")?;
+        for (d, r) in buf.as_chunks_mut::<4>().0.iter_mut().zip(rewards) {
+            *d = r.to_le_bytes();
+        }
+        let flags_into = |buf: &mut [u8], src: &[tessera_rl_core::Bool8]| {
+            for (d, f) in buf.iter_mut().zip(src) {
+                *d = f.to_byte();
+            }
+        };
+        flags_into(
+            next(out.agent_terminated().len(), "agent_terminated")?,
+            out.agent_terminated(),
+        );
+        flags_into(
+            next(out.agent_truncated().len(), "agent_truncated")?,
+            out.agent_truncated(),
+        );
+        flags_into(next(out.alive().len(), "alive")?, out.alive());
+        flags_into(next(out.acting().len(), "acting")?, out.acting());
+        let generations = out.generations();
+        let buf = next(generations.len() * 4, "slot_generations")?;
+        for (d, g) in buf.as_chunks_mut::<4>().0.iter_mut().zip(generations) {
+            *d = g.to_le_bytes();
+        }
+        flags_into(
+            next(out.episode_terminated().len(), "episode_terminated")?,
+            out.episode_terminated(),
+        );
+        flags_into(
+            next(out.episode_truncated().len(), "episode_truncated")?,
+            out.episode_truncated(),
+        );
+        if !masks.is_empty() {
+            flags_into(next(masks.len(), "masks")?, masks);
+        }
+        Ok(())
     }
 
     fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage> {
@@ -2045,6 +2138,104 @@ mod tests {
 
     use super::*;
     use crate::split::common::{CountConfig, Counter};
+
+    /// Counts this thread's allocations (`outputs_into`'s zero-allocation
+    /// test, ADR-0095 point 5).
+    #[global_allocator]
+    static COUNTING: tessera_rl_pyffi::xla::testing::CountingAlloc =
+        tessera_rl_pyffi::xla::testing::CountingAlloc;
+
+    fn sync_args(n: u32) -> PoolArgs {
+        PoolArgs {
+            num_envs: n,
+            seed: 3,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: None,
+            schedule: "static".to_owned(),
+            workers: Some(0),
+            spin: None,
+            wait: None,
+            wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
+            policy_map: None,
+            pipelined: false,
+            asynced: None,
+            privileged_state: false,
+        }
+    }
+
+    /// The `Owned` fields, in `outputs_into`'s order.
+    fn owned_parts(o: &Owned) -> Vec<Vec<u8>> {
+        let mut parts = o.observations.clone();
+        parts.extend([
+            o.rewards.clone(),
+            o.agent_terminated.clone(),
+            o.agent_truncated.clone(),
+            o.alive.clone(),
+            o.acting.clone(),
+            o.slot_generations.clone(),
+            o.episode_terminated.clone(),
+            o.episode_truncated.clone(),
+        ]);
+        if !o.masks.is_empty() {
+            parts.push(o.masks.clone());
+        }
+        parts
+    }
+
+    #[test]
+    fn test_outputs_into_equals_outputs_without_allocating() {
+        let mut pool = tag(&sync_args(4), &TagFields::default()).unwrap();
+        pool.reset(None, &ResetSeed::Keep).unwrap();
+        let agents = pool.layout().agents;
+        // Stay (0) is always legal under Tag's mask.
+        let actions = vec![0i32; 4 * agents];
+        for _ in 0..5 {
+            pool.step(ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            })
+            .unwrap();
+            let want = owned_parts(&pool.outputs().unwrap());
+            let mut bufs: Vec<Vec<u8>> = want.iter().map(|w| vec![0xAA; w.len()]).collect();
+            let mut views: Vec<&mut [u8]> = bufs.iter_mut().map(Vec::as_mut_slice).collect();
+            let mut result = Ok(());
+            let n =
+                tessera_rl_pyffi::xla::testing::count(|| result = pool.outputs_into(&mut views));
+            result.unwrap();
+            assert_eq!(n, 0, "allocations on the success path");
+            assert_eq!(bufs, want);
+        }
+    }
+
+    #[test]
+    fn test_outputs_into_refuses_privileged_state() {
+        let args = PoolArgs {
+            privileged_state: true,
+            ..sync_args(2)
+        };
+        let mut pool = leduc(&args).unwrap();
+        pool.reset(None, &ResetSeed::Keep).unwrap();
+        let want = owned_parts(&pool.outputs().unwrap());
+        let mut bufs: Vec<Vec<u8>> = want.iter().map(|w| vec![0; w.len()]).collect();
+        let mut views: Vec<&mut [u8]> = bufs.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(pool.outputs_into(&mut views).is_err());
+    }
+
+    #[test]
+    fn test_outputs_into_refuses_wrong_buffers() {
+        let mut pool = cartpole(&sync_args(2)).unwrap();
+        pool.reset(None, &ResetSeed::Keep).unwrap();
+        let want = owned_parts(&pool.outputs().unwrap());
+        let mut short: Vec<Vec<u8>> = want.iter().map(|w| vec![0; w.len()]).collect();
+        short.pop();
+        let mut views: Vec<&mut [u8]> = short.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(pool.outputs_into(&mut views).is_err());
+        let mut wrong: Vec<Vec<u8>> = want.iter().map(|w| vec![0; w.len() + 1]).collect();
+        let mut views: Vec<&mut [u8]> = wrong.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(pool.outputs_into(&mut views).is_err());
+    }
 
     fn poisonable() -> Box<dyn PoolOps> {
         let cfg = CountConfig {

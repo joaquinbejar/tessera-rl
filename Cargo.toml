@@ -122,7 +122,7 @@ xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 gif = "=0.14.2"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(tessera_xla_loom)"] }
 missing_docs = "deny"
 # `deny`, not `forbid`: the audited modules (engine::buffer, engine::sys,
 # pyffi::ffi, simd, core::encoding, num::fp, onnx::sys) opt in with
