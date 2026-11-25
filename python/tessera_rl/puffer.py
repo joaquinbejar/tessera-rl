@@ -12,13 +12,22 @@ module does not change directory around it, since that is process-global: import
 it from a directory you can write to and do not mind the link in. A failed
 import raises ``ImportError`` naming the cause.
 
-**Environments.** An allowlist: CartPole, Tag, Gather and GridKeyDoor. Sequential environments are
+**Environments.** An allowlist: CartPole, Tag, Gather, GridKeyDoor and Survival. Sequential environments are
 refused: PufferLib has no turns, and its trainer would train on idle seats.
 Auto-reset is ``same_step``, fixed. ``terminal_observations`` holds final
 observations, which PufferLib's tuple has no place for. PufferLib passes no action masks to a policy, so in Tag
 an illegal action is a no-op (``env.action_masks`` has the masks); an out-of-range
 one raises ``ActionError``. ``masks`` is PufferLib's "agent counted in this
 batch", always true, so dead Tag agents count as steps.
+
+**Action heads** (#617). One discrete head gives ``Discrete(n)`` and actions of
+shape ``(num_agents,)``. Several *independent* heads (no head's mask depends on
+another's value; Survival's move and act) give ``MultiDiscrete(nvec)`` and
+actions of shape ``(num_agents, heads)``. ``action_masks`` is then
+``(num_agents, sum(nvec))``: the heads' rows side by side in head order, head
+``h`` at columns ``sum(nvec[:h])`` to ``sum(nvec[:h + 1])``. Heads with
+conditional masks (RTS, LimitOrderBook) are refused, naming the head: their
+masks need a policy that samples head by head.
 
 **Buffers.** With ``buf=None`` (the native backend) the first ``reset`` replaces
 the env's arrays with reshaped read-only views of the engine's buffers, with no
@@ -119,7 +128,9 @@ except Exception as e:  # PermissionError in a read-only directory, among others
     ) from e
 
 #: Environments tested through this adapter.
-SUPPORTED = frozenset({"tessera/CartPole-v1", "tessera/Gather-v1", "tessera/GridKeyDoor-v1", "tessera/Tag-v1"})
+SUPPORTED = frozenset(
+    {"tessera/CartPole-v1", "tessera/Gather-v1", "tessera/GridKeyDoor-v1", "tessera/Tag-v1", "tessera/Survival-v1"}
+)
 
 #: Above this a worker count is refused here, rather than failing to start threads
 #: at the first reset, which is a parent hang under Multiprocessing.
@@ -165,6 +176,21 @@ def flat_dtype(dtypes) -> np.dtype:
     dtypes. ``ArgumentError`` when it is a float whose mantissa cannot hold every
     value of an integer leaf, the promotions that are not lossless."""
     return _flat.flat_dtype(dtypes, "observation leaves", "the PufferLib adapter")
+
+
+def _check_heads(env_id: str, nvec: tuple, mask_heads) -> None:
+    """Admits one head, or several independent ones (#617). A head whose mask
+    depends on a parent head (``mask_heads`` lists the parents' sizes) needs
+    a policy that samples head by head, which PufferLib's trainer does not do:
+    refused, naming the head and its parent."""
+    if len(nvec) == 1:
+        return
+    for head, (_, parents, size) in enumerate(mask_heads):
+        if parents:
+            raise _native.ArgumentError(
+                f"{env_id}: action head {head} ({size} choices) has a conditional mask on parent heads of "
+                f"{list(parents)} choices; the PufferLib adapter takes independent heads only"
+            )
 
 
 def _observation_space(leaves: list) -> tuple:
@@ -258,8 +284,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             layout = probe._native.layout()
             if layout["action_bounds"] is not None:
                 raise _native.ArgumentError(f"{env_id} has continuous actions; the PufferLib adapter is discrete only")
-            if len(layout["action_nvec"]) > 1:
-                raise _native.ArgumentError(f"{env_id} has several action heads; the PufferLib adapter takes one")
+            nvec = tuple(layout["action_nvec"])
+            _check_heads(env_id, nvec, layout["mask_heads"])
             self._leaf_names = [leaf[0] for leaf in layout["leaves"]]
             dtype, shape, low, high = _observation_space(layout["leaves"])
             self._instances, self._agents = probe.num_envs, probe.agents
@@ -279,7 +305,15 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self._row_agents = self._agents if self._visible is None else len(self._visible)
         self.num_agents = self._instances * self._row_agents
         self.single_observation_space = gymnasium.spaces.Box(low=low, high=high, shape=shape, dtype=dtype)
-        self.single_action_space = gymnasium.spaces.Discrete(choices)
+        #: Discrete heads per agent: 1 (`Discrete`), or several independent
+        #: ones (`MultiDiscrete`, #617).
+        self._heads = len(nvec)
+        if self._heads == 1:
+            self.single_action_space = gymnasium.spaces.Discrete(choices)
+        else:
+            self.single_action_space = gymnasium.spaces.MultiDiscrete(np.asarray(nvec, dtype=np.int64))
+        #: Mask entries per agent: the heads' rows side by side.
+        self._mask_width = sum(nvec)
         # Hidden slots need a gather each step, so the env keeps its own
         # arrays then, as with a vector backend's buffers.
         self._owned_buffers = buf is not None or self._visible is not None
@@ -293,6 +327,11 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self._obs_leaves: list | None = None
         self._flat_obs: np.ndarray | None = None
         self._terminal: np.ndarray | None = None
+
+    @property
+    def _head_axis(self) -> tuple[int, ...]:
+        """The trailing action axis: ``()`` for one head, ``(heads,)`` for several."""
+        return () if self._heads == 1 else (self._heads,)
 
     @property
     def _flattens(self) -> bool:
@@ -429,8 +468,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self._require_reset("step")
         if self._visible is not None:
             # The hidden slots' rows are never read: the engine computes them.
-            full = np.zeros((self._instances, self._agents), dtype=np.int32)
-            full[:, self._visible] = np.asarray(actions).reshape((self._instances, self._row_agents))
+            full = np.zeros((self._instances, self._agents, *self._head_axis), dtype=np.int32)
+            full[:, self._visible] = np.asarray(actions).reshape((self._instances, self._row_agents, *self._head_axis))
             actions = full
         self._env.step(actions)
         self._copy_out()
@@ -514,7 +553,7 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
                     np.zeros(self._half_agents, dtype=np.float32),
                     np.zeros(self._half_agents, dtype=bool),
                     np.zeros(self._half_agents, dtype=bool),
-                    np.zeros((self._half_agents, self.single_action_space.n), dtype=bool),
+                    np.zeros((self._half_agents, self._mask_width), dtype=bool),
                 )
         self._queue: list = []
         self._current: int | None = None
@@ -606,8 +645,10 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
             raise _native.ArgumentError("send without a half: call recv first")
         if self._visible is not None:
             # The hidden slots' rows are never read: the engine computes them.
-            full = np.zeros((self._half_instances, self._agents), dtype=np.int32)
-            full[:, self._visible] = np.asarray(actions).reshape((self._half_instances, self._row_agents))
+            full = np.zeros((self._half_instances, self._agents, *self._head_axis), dtype=np.int32)
+            full[:, self._visible] = np.asarray(actions).reshape(
+                (self._half_instances, self._row_agents, *self._head_axis)
+            )
             actions = full
         self._env.send(self._current, actions)
         self._current = None
