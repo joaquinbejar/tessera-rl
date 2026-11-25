@@ -235,8 +235,13 @@ struct PyAllocator(Held);
 
 impl OutputAllocator for PyAllocator {
     fn allocate(&self, len: usize, align: usize) -> Option<ExternalAlloc> {
-        let _ = take_allocation_error();
-        with_interpreter(|g| allocate_in(g, &self.0, len, align)).flatten()
+        // A stale refusal is cleared with the interpreter held, so a stashed
+        // interrupt's references are released under the GIL (REVIEW-py-r2).
+        with_interpreter(|g| {
+            clear_allocation_error(g);
+            allocate_in(g, &self.0, len, align)
+        })
+        .flatten()
     }
 }
 
