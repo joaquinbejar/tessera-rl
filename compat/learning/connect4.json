@@ -20,10 +20,10 @@
     "env": "tessera/Connect4-v1",
     "total_steps": 1000000,
     "eval_episodes": 50,
-    "fingerprint": "0a9d4db562b588c5b847c590306434b9c0f8a347b46e3459116c9999aac633a7"
+    "fingerprint": "e0f965936b3af1d984b806bf6c69bcdcd87b445dd0c67bc878ae4eb4746b6977"
   },
   "environment": {
-    "git": "5b878316465aca0769c86e41e03c05b7b394c943",
+    "git": "ced469f5e61f3e312bcd70e1a8a03762328af979",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",

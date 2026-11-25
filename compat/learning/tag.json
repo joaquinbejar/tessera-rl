@@ -20,10 +20,10 @@
     "env": "tessera/Tag-v1",
     "total_steps": 1000000,
     "eval_episodes": 50,
-    "fingerprint": "f52f902b98e3c1b8e9fed84403ebaa32eabb40d9fe52b02e97fc21c6c407f087"
+    "fingerprint": "840ce9f8355f72813cf003ebdd5f853670af27292353213c6032c3394c900fa4"
   },
   "environment": {
-    "git": "5b878316465aca0769c86e41e03c05b7b394c943",
+    "git": "ced469f5e61f3e312bcd70e1a8a03762328af979",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
