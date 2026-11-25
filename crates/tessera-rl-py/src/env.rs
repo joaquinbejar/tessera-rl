@@ -2358,7 +2358,7 @@ mod tests {
             &mut sets,
         )
         .unwrap();
-        assert!(sets.is_empty());
+        assert_eq!(sets.len(), 0);
         out.pop().unwrap()
     }
 
@@ -2372,8 +2372,14 @@ mod tests {
             },
             DType::I64,
         );
-        assert_eq!(leaf.low, vec![Bound::Int(i64::MIN), Bound::Int(-(1 << 53) - 1)]);
-        assert_eq!(leaf.high, vec![Bound::Int(i64::MAX), Bound::Int((1 << 53) + 1)]);
+        assert_eq!(
+            leaf.low,
+            vec![Bound::Int(i64::MIN), Bound::Int(-(1 << 53) - 1)]
+        );
+        assert_eq!(
+            leaf.high,
+            vec![Bound::Int(i64::MAX), Bound::Int((1 << 53) + 1)]
+        );
     }
 
     #[test]
@@ -2387,7 +2393,10 @@ mod tests {
             DType::U32,
         );
         assert_eq!(leaf.low, vec![Bound::UInt(0), Bound::UInt((1 << 53) + 1)]);
-        assert_eq!(leaf.high, vec![Bound::UInt(u64::MAX), Bound::UInt((1 << 53) + 1)]);
+        assert_eq!(
+            leaf.high,
+            vec![Bound::UInt(u64::MAX), Bound::UInt((1 << 53) + 1)]
+        );
     }
 
     #[test]
