@@ -326,7 +326,7 @@ fn test_replay_curriculum_initial_tag_7_carries_the_targets_at_recording_start()
     // Targets changed before the recorder: only the initial tag 7 tells the
     // replay, whose pool starts from the config's.
     let mut pool = targets_only();
-    let mut v = *pool.targets().unwrap().get(0).unwrap();
+    let mut v = *pool.targets().unwrap().first().unwrap();
     v.level = 9;
     pool.set_targets(&(0..N).map(|i| (i, v)).collect::<Vec<_>>())
         .unwrap();
