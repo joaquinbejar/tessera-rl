@@ -39,8 +39,13 @@ where
             if let Some(t) = pool.transform.as_mut() {
                 t.barrier();
             }
-            // The league, the fourth subsystem (ADR-0088 section 7): on
-            // error its view and rings stay, and the pool is not poisoned.
+            // The league, the fourth subsystem (ADR-0088 section 7). The
+            // commit order: episode statistics and normalization have
+            // merged and cleared their accumulators before the league runs;
+            // if the league's subsystem fails, the barrier returns the
+            // error with the league's view and rings unchanged and the pool
+            // not poisoned, so the next barrier applies those results once
+            // (rev's ruling 1 on #384 head B).
             if let Some(league) = pool.league.as_mut() {
                 report.league = league.barrier()?;
             }

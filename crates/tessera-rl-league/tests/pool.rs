@@ -602,3 +602,63 @@ fn test_league_pool_recording_is_refused_until_head_d() {
         got.err()
     );
 }
+
+/// A subsystem that fails its first barrier, then records what it gets.
+struct FailOnce {
+    view: LeagueView,
+    calls: u32,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl tessera_rl_engine::league::sealed::Sealed for FailOnce {}
+
+impl tessera_rl_engine::league::LeagueSubsystem for FailOnce {
+    fn barrier(
+        &mut self,
+        results: tessera_rl_engine::league::LeagueResults<'_>,
+    ) -> Result<(LeagueView, tessera_rl_engine::league::LeagueReport), tessera_rl_engine::league::LeagueBarrierError> {
+        self.calls += 1;
+        self.seen.lock().unwrap().push(results.results.len());
+        if self.calls == 1 {
+            return Err(tessera_rl_engine::league::LeagueBarrierError {
+                reason: "first barrier fails".to_owned(),
+            });
+        }
+        Ok((
+            self.view.clone(),
+            tessera_rl_engine::league::LeagueReport::new(results.results.len() as u64, results.dropped, false),
+        ))
+    }
+}
+
+/// Rev's ruling 1 on head B: after a failed league barrier the results are
+/// kept, the pool is not poisoned, and the next barrier applies them
+/// exactly once.
+#[test]
+fn test_league_results_kept_after_a_failed_barrier_apply_exactly_once() {
+    let view = league(&MIXED).view().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sub = FailOnce {
+        view: view.clone(),
+        calls: 0,
+        seen: seen.clone(),
+    };
+    let mut p = EnvPool::<PaddleDuel, NoMasks>::new(cfg(), options(Schedule::Static, 6))
+        .unwrap()
+        .with_league(&[1], view, Box::new(sub))
+        .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    for t in 0..14 {
+        step(&mut p, t % 3);
+    }
+    assert!(matches!(p.epoch_barrier(), Err(EngineError::LeagueBarrier(_))));
+    let applied = p.epoch_barrier().unwrap().league.unwrap().applied;
+    assert_eq!(p.epoch_barrier().unwrap().league.unwrap().applied, 0);
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen[0] > 0, "{seen:?}");
+    // The second barrier got exactly the kept results, the third none.
+    assert_eq!(usize::try_from(applied).unwrap(), seen[0], "{seen:?}");
+    assert_eq!(seen, vec![seen[0], seen[0], 0]);
+    // Not poisoned: the pool still steps.
+    step(&mut p, 0);
+}
