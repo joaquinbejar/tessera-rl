@@ -119,6 +119,16 @@ const fn split(bits: u128) -> [u64; 2] {
     [bits as u64, (bits >> 64) as u64]
 }
 
+/// Whether two history entries are equal, as one XOR and OR of the three
+/// words: no slice or array compare, so no `memcmp`/`bcmp` call at any LTO
+/// level (#611; on musl `memcmp` is a byte loop, #583).
+#[inline]
+#[must_use]
+const fn same(a: &[u64; 3], b: &[u64; 3]) -> bool {
+    let ([a0, a1, a2], [b0, b1, b2]) = (*a, *b);
+    ((a0 ^ b0) | (a1 ^ b1) | (a2 ^ b2)) == 0
+}
+
 /// Packs a position into 192 bits: black in the low 81, white above.
 #[expect(
     clippy::cast_possible_truncation,
@@ -185,7 +195,7 @@ impl Go9State {
         let packed = pack(black, white);
         self.history
             .get(..n as usize)
-            .is_some_and(|h| h.contains(&packed))
+            .is_some_and(|h| h.iter().any(|entry| same(entry, &packed)))
     }
 
     /// The legal placement on the point `sq` for the side to move: its
