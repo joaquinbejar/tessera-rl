@@ -32,6 +32,11 @@ Two take Gather's observation (a `Set`, #505): inputs `agent` int32
   the value.
 - sets_wrong_mask.onnx: as sets_gather, but `items_mask` is uint8.
 
+One takes PaddleDuel's state observation (`obs` float32 [N, 9]) as a
+league opponent (ADR-0088 erratum 2, #384 head C):
+- opponent_paddleduel.onnx: actions int64 [N] = 2 if obs[:, 0] >= obs[:, 1]
+  else 0, exact (a comparison), so a Rust reference gives the same actions.
+
 Two fixtures come from spike S1's generator, not from this script:
 s1_mlp.onnx and s1_fuse.onnx (their sha256 are checked by the tests).
 """
@@ -187,6 +192,26 @@ def sets_gather(mask_type=TensorProto.BOOL):
     return m
 
 
+def opponent_paddleduel():
+    obs = helper.make_tensor_value_info("obs", TensorProto.FLOAT, ["N", 9])
+    actions = helper.make_tensor_value_info("actions", TensorProto.INT64, ["N"])
+    inits = [
+        numpy_helper.from_array(np.array([0], dtype=np.int64), "i0"),
+        numpy_helper.from_array(np.array([1], dtype=np.int64), "i1"),
+        numpy_helper.from_array(np.array(2, dtype=np.int64), "two"),
+    ]
+    nodes = [
+        helper.make_node("Gather", ["obs", "i0"], ["c0"], axis=1),
+        helper.make_node("Gather", ["obs", "i1"], ["c1"], axis=1),
+        helper.make_node("GreaterOrEqual", ["c0", "c1"], ["ge"]),
+        helper.make_node("Cast", ["ge"], ["ge64"], to=TensorProto.INT64),
+        helper.make_node("Mul", ["ge64", "two"], ["m"]),
+        helper.make_node("Squeeze", ["m", "i1"], ["actions"]),
+    ]
+    graph = helper.make_graph(nodes, "opponent_paddleduel", [obs], [actions], inits)
+    return helper.make_model(graph, opset_imports=[helper.make_opsetid("", OPSET)], ir_version=IR)
+
+
 def main(out):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -199,6 +224,7 @@ def main(out):
     onnx.save(slow_connect4(), "slow_connect4.onnx")
     onnx.save(sets_gather(), "sets_gather.onnx")
     onnx.save(sets_gather(TensorProto.UINT8), "sets_wrong_mask.onnx")
+    onnx.save(opponent_paddleduel(), "opponent_paddleduel.onnx")
     if Path("external.bin").exists():
         Path("external.bin").unlink()
     onnx.save(model(), "external.onnx", save_as_external_data=True,
