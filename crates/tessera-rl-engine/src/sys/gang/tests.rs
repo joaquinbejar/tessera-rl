@@ -6,8 +6,9 @@
 use core::num::NonZeroUsize;
 
 use super::{Faults, Gang, GangOptions, Job};
+use crate::buffer::claim::Cursors;
 use crate::error::EngineError;
-use crate::sys::sync::{Arc, AtomicUsize, Ordering};
+use crate::sys::sync::{Arc, AtomicBool, AtomicUsize, Ordering, thread};
 
 fn options(workers: usize) -> GangOptions {
     GangOptions {
@@ -781,63 +782,120 @@ fn test_gang_adaptive_worker_spins_through_a_learned_gap() {
     ));
 }
 
-/// The Dynamic claim loop of `par_chunks` (ADR-0076) over `chunks` chunks on
-/// `workers` workers: each worker takes indices from one counter until they
-/// run out, and runs each claimed chunk under the per-chunk catch. `panic_chunk`
-/// panics inside a chunk (caught per chunk). `die_after_claim` makes that
-/// worker's first claim end its job outside the per-chunk catch, after the
-/// claim and before running the chunk. Returns the run's result and how many
-/// times each chunk ran.
+/// The owner-first Dynamic claim loop of `par_chunks` (ADR-0087), the real
+/// [`Cursors::run`], over `chunks` chunks on `workers` workers: each worker
+/// drains its own share, then steals from the others in rotation, and runs
+/// each claimed chunk under the per-chunk catch. `panic_chunk` panics inside
+/// a chunk (caught per chunk). `die_after_claim` makes that worker's first
+/// claim end its job outside the per-chunk catch, after the claim and before
+/// running the chunk. Returns the run's result and how many times each chunk
+/// ran.
 fn dynamic_claims(
     workers: usize,
     chunks: usize,
     panic_chunk: Option<usize>,
     die_after_claim: Option<usize>,
 ) -> (Result<bool, EngineError>, Vec<usize>) {
-    let runs: Arc<Vec<AtomicUsize>> = Arc::new((0..chunks).map(|_| AtomicUsize::new(0)).collect());
-    let next = Arc::new(AtomicUsize::new(0));
-    let chunk_panicked = Arc::new(AtomicUsize::new(0));
+    let runs: Vec<AtomicUsize> = (0..chunks).map(|_| AtomicUsize::new(0)).collect();
+    let claimed: Vec<AtomicBool> = (0..workers).map(|_| AtomicBool::new(false)).collect();
+    let chunk_panicked = AtomicBool::new(false);
+    let cursors = Cursors::new(workers);
     let result = {
         let mut gang = Gang::new(&options(workers)).unwrap();
-        let (r, n, p) = (
-            Arc::clone(&runs),
-            Arc::clone(&next),
-            Arc::clone(&chunk_panicked),
-        );
-        let job = move |w: usize| {
-            let mut first = true;
-            loop {
-                let c = n.fetch_add(1, Ordering::Relaxed);
-                if c >= chunks {
-                    break;
-                }
-                assert!(
-                    !(first && die_after_claim == Some(w)),
-                    "injected death after claiming chunk {c}"
-                );
-                first = false;
-                let ok = crate::sys::catch(|| {
-                    r[c].fetch_add(1, Ordering::Relaxed);
-                    assert!(panic_chunk != Some(c), "injected chunk panic");
-                });
-                if !ok {
-                    p.fetch_add(1, Ordering::Relaxed);
-                }
+        let job = |c: usize, w: usize| {
+            let first = !claimed[w].swap(true, Ordering::Relaxed);
+            assert!(
+                !(first && die_after_claim == Some(w)),
+                "injected death after claiming chunk {c}"
+            );
+            let ok = crate::sys::catch(|| {
+                runs[c].fetch_add(1, Ordering::Relaxed);
+                assert!(panic_chunk != Some(c), "injected chunk panic");
+            });
+            if !ok {
+                chunk_panicked.store(true, Ordering::Relaxed);
             }
         };
-        let result = gang.run(&job);
-        result.map(|gang_panicked| gang_panicked || chunk_panicked.load(Ordering::Relaxed) > 0)
+        let result = cursors.run(&mut gang, chunks, &job);
+        result.map(|gang_panicked| gang_panicked || chunk_panicked.load(Ordering::Relaxed))
     };
     let counts = runs.iter().map(|c| c.load(Ordering::Relaxed)).collect();
     (result, counts)
 }
 
+/// Two workers, three chunks: shares {0, 2} and {1}, so worker 1 drains its
+/// one chunk and then steals from share 0 while its owner claims from it.
 #[test]
 fn test_gang_dynamic_claims_run_every_chunk_exactly_once() {
     model(|| {
         let (result, counts) = dynamic_claims(2, 3, None, None);
         assert_eq!(result, Ok(false));
         assert_eq!(counts, vec![1, 1, 1]);
+    });
+}
+
+/// The claim loop alone on three threads, four chunks: shares {0, 3}, {1}
+/// and {2}, so two stealers race the owner of share 0 and each other.
+#[test]
+fn test_gang_dynamic_claims_on_three_workers_run_every_chunk_exactly_once() {
+    model(|| {
+        const CHUNKS: usize = 4;
+        let cursors = Arc::new(Cursors::new(3));
+        let runs: Arc<Vec<AtomicUsize>> =
+            Arc::new((0..CHUNKS).map(|_| AtomicUsize::new(0)).collect());
+        let spawn = |w: usize| {
+            let (cursors, runs) = (Arc::clone(&cursors), Arc::clone(&runs));
+            thread::spawn(move || {
+                cursors.claim(w, CHUNKS, |c| {
+                    runs[c].fetch_add(1, Ordering::Relaxed);
+                });
+            })
+        };
+        let (a, b) = (spawn(1), spawn(2));
+        cursors.claim(0, CHUNKS, |c| {
+            runs[c].fetch_add(1, Ordering::Relaxed);
+        });
+        a.join().unwrap();
+        b.join().unwrap();
+        let counts: Vec<usize> = runs.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+        assert_eq!(counts, vec![1; CHUNKS]);
+    });
+}
+
+/// Two jobs back to back on one cursor array (the reset between them is
+/// `Cursors::run`'s, as in `par_chunks`): a slow stealer of the first job
+/// never claims after the reset, and each chunk of each job runs exactly
+/// once (ADR-0087 point 6).
+#[test]
+fn test_gang_dynamic_claims_back_to_back_jobs_run_each_chunk_once_per_job() {
+    model(|| {
+        const CHUNKS: usize = 3;
+        let cursors = Cursors::new(2);
+        let mut gang = Gang::new(&options(2)).unwrap();
+        let first: Vec<AtomicUsize> = (0..CHUNKS).map(|_| AtomicUsize::new(0)).collect();
+        let second: Vec<AtomicUsize> = (0..CHUNKS).map(|_| AtomicUsize::new(0)).collect();
+        let first_done = AtomicBool::new(false);
+        let late = AtomicBool::new(false);
+        let job_a = |c: usize, _w: usize| {
+            if first_done.load(Ordering::SeqCst) {
+                late.store(true, Ordering::SeqCst);
+            }
+            first[c].fetch_add(1, Ordering::Relaxed);
+        };
+        assert_eq!(cursors.run(&mut gang, CHUNKS, &job_a), Ok(false));
+        first_done.store(true, Ordering::SeqCst);
+        let job_b = |c: usize, _w: usize| {
+            second[c].fetch_add(1, Ordering::Relaxed);
+        };
+        assert_eq!(cursors.run(&mut gang, CHUNKS, &job_b), Ok(false));
+        assert!(
+            !late.load(Ordering::SeqCst),
+            "a claim of job A after its run"
+        );
+        let a: Vec<usize> = first.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+        let b: Vec<usize> = second.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+        assert_eq!(a, vec![1; CHUNKS]);
+        assert_eq!(b, vec![1; CHUNKS]);
     });
 }
 
@@ -881,26 +939,21 @@ fn test_gang_dynamic_claims_worker_dying_after_a_claim_never_reports_success() {
 #[test]
 fn test_gang_dynamic_claims_with_a_dead_worker_backstop_complete_then_report() {
     model(|| {
+        const CHUNKS: usize = 3;
         let mut opts = options(2);
         opts.faults.die_in_epoch = Some(1);
         let mut gang = Gang::new(&opts).unwrap();
-        let chunks = 3;
-        let runs: Arc<Vec<AtomicUsize>> =
-            Arc::new((0..chunks).map(|_| AtomicUsize::new(0)).collect());
-        let next = Arc::new(AtomicUsize::new(0));
-        let (r, n) = (Arc::clone(&runs), Arc::clone(&next));
-        let job = move |_w: usize| loop {
-            let c = n.fetch_add(1, Ordering::Relaxed);
-            if c >= chunks {
-                break;
-            }
-            r[c].fetch_add(1, Ordering::Relaxed);
+        let cursors = Cursors::new(2);
+        let runs: Vec<AtomicUsize> = (0..CHUNKS).map(|_| AtomicUsize::new(0)).collect();
+        let job = |c: usize, _w: usize| {
+            runs[c].fetch_add(1, Ordering::Relaxed);
         };
-        // The dead worker never claims, so the live one runs every chunk once;
-        // the run still reports the death as a panic, never success.
-        assert_eq!(gang.run(&job), Ok(true));
+        // The dead worker never claims, so the live one runs every chunk once
+        // (its own share, then the dead worker's); the run still reports the
+        // death as a panic, never success.
+        assert_eq!(cursors.run(&mut gang, CHUNKS, &job), Ok(true));
         let counts: Vec<usize> = runs.iter().map(|c| c.load(Ordering::Relaxed)).collect();
-        assert_eq!(counts, vec![1, 1, 1]);
+        assert_eq!(counts, vec![1; CHUNKS]);
         assert_eq!(
             gang.run(&|_w: usize| {}).map(|_| ()),
             Err(EngineError::WorkerDied)

@@ -68,12 +68,16 @@ pub enum Schedule {
     /// warm. The default.
     #[default]
     Static,
-    /// Workers claim the next chunk from a per-job counter until every
-    /// chunk is taken, balancing variable per-instance cost.
+    /// Workers claim chunks until every chunk is taken, balancing variable
+    /// per-instance cost (ADR-0087): worker `w` first claims the chunks
+    /// `Static` gives it, from its own cursor, then takes the chunks other
+    /// workers have not claimed yet, in a fixed rotation. Outputs are
+    /// bit-identical to `Static`.
     ///
     /// Use it for variable step cost only, and avoid small chunks. The
     /// `schedule_step` bench, on a quiet 8-core x86-64 host (indicative,
-    /// not a reference machine), measured:
+    /// not a reference machine), measured the earlier single-counter
+    /// claiming (ADR-0076), which owner-first claiming replaces:
     /// - uniform cost at the default 64 instances per chunk: about 2%
     ///   faster than `Static` on 4 workers and about 6% slower on 8, where
     ///   the claimed chunks lose the per-worker cache affinity;

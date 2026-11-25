@@ -4,7 +4,7 @@
 //! on 4 and 8 workers.
 //!
 //! - `counter`: uniform cost, where Dynamic must not regress beyond noise;
-//!   at chunk size 1 it also measures contention on the claim counter.
+//!   at chunk size 1 it also measures contention on the claim cursors.
 //! - `varcost`: heaviness drawn per episode (1 instance in 16, 64 times the
 //!   work), spread over many chunks: Static is close to balanced already.
 //! - `varskew`: heaviness redrawn every step (1 in 64, 1024 times the work),

@@ -98,6 +98,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- `Schedule::Dynamic` claims chunks owner first (ADR-0087, #436): worker `w` drains the chunks `Static` gives it from its own claim cursor (one per worker, each on its own cache line, allocated once per Sync runtime and per Pipelined half), then steals from the other workers' shares in a fixed rotation. The API, the guarantees and the outputs are unchanged (bit-identical to `Static`); only the claim order changes, to remove contention on the one shared counter and keep `Static`'s instance-to-worker affinity on uniform cost.
 - Performance, outputs unchanged:
   - the engine skips the per-agent died and spawned row reads when no agent event fired, and CartPole writes its observation with one leaf copy (#152, #333);
   - the PufferLib adapter counts ended episodes on the `uint32` view of the episode lengths (#294, #341);

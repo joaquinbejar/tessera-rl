@@ -22,6 +22,7 @@ use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
 use crate::archive::ArchiveSource;
+use crate::buffer::claim::Cursors;
 use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::heuristic::{HeuristicFn, HeuristicRoute};
@@ -293,6 +294,9 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
 #[derive(Debug)]
 pub(crate) struct SyncRuntime {
     pub(crate) gang: Gang,
+    /// The `Schedule::Dynamic` claim cursors of `par_chunks`, one per
+    /// worker, allocated here once (ADR-0087).
+    pub(crate) cursors: Cursors,
     pub(crate) workers: usize,
     pub(crate) native: bool,
     /// Whether the workers were pinned to cores.
@@ -408,6 +412,12 @@ pub(crate) fn pin_plan(
 }
 
 impl SyncRuntime {
+    /// The gang and its `Schedule::Dynamic` claim cursors, for `par_chunks`.
+    #[must_use]
+    pub(crate) fn parts(&mut self) -> (&mut Gang, &Cursors) {
+        (&mut self.gang, &self.cursors)
+    }
+
     /// Starts the workers of `options` under `pinning`. Shared by `EnvPool`
     /// and the host pool (ADR-0062).
     pub(crate) fn start(
@@ -450,6 +460,7 @@ impl SyncRuntime {
         })?;
         Ok(Self {
             gang,
+            cursors: Cursors::new(workers),
             workers,
             native: native.is_some(),
             pinned,
@@ -959,7 +970,7 @@ where
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
             let grain = (chunk_size(options), options.schedule);
-            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, first| {
+            let panicked = par_chunks(rt.parts(), all, grain, heads, |chunk, first| {
                 reset_chunk::<E, M>(cfg, authority, (archive, targets), chunk, reseed, first);
             })?;
             if panicked {
@@ -1317,7 +1328,7 @@ where
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
             let grain = (chunk_size(options), options.schedule);
-            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, first| {
+            let panicked = par_chunks(rt.parts(), all, grain, heads, |chunk, first| {
                 step_chunk_at::<E, M>(&ctx, chunk, first);
                 if !may_step_cleanly::<E>() || !steps_cleanly(chunk.headers) {
                     clean.store(false, Ordering::Relaxed);

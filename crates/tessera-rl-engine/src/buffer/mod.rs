@@ -26,14 +26,19 @@
 //!    and by tests). Which worker runs a chunk depends on the schedule
 //!    (ADR-0076):
 //!    - `Static`: worker `w` takes the chunks `c` with `c % workers == w`.
-//!    - `Dynamic`: workers take chunk indices from one counter per job with
-//!      `fetch_add`; an atomic read-modify-write hands out each value once,
-//!      so `Relaxed` is enough for uniqueness. The counter lives in the
-//!      job's frame (or, for a Pipelined half, in that half's work record,
-//!      reset before each publication), and outlives every use because the
-//!      job is waited for before the frame ends or the half is published
-//!      again. Visibility of chunk writes to the caller is ordered by the
-//!      job's completion, as under `Static`.
+//!    - `Dynamic` (owner-first, ADR-0087): worker `w` owns the chunks
+//!      `Static` gives it, and any worker claims the next chunk of share
+//!      `v` from that share's cursor with `fetch_add`: value `k` is chunk
+//!      `v + k * workers` while below the chunk count ([`claim`]). Each
+//!      chunk belongs to one share and an atomic read-modify-write hands
+//!      out each value once, so `Relaxed` is enough for uniqueness. The
+//!      cursors are allocated once (one array per Sync runtime, one per
+//!      Pipelined half) and reset to zero before a job is published, only
+//!      after every worker of the previous job on that array made its last
+//!      access to it: for `par_chunks` its decrement of the gang job's
+//!      `pending` (`sys::gang` invariant 3), for a Pipelined half its
+//!      decrement of the half's `remaining`. Visibility of chunk writes to
+//!      the caller is ordered by the job's completion, as under `Static`.
 //! 3. The caller forms references only to rows covered by a live token,
 //!    and workers only to the rows of an admitted job or claim. In Sync
 //!    mode this is the whole-epoch rule: `par_chunks` takes the pool-wide
@@ -52,6 +57,7 @@
 
 #[cfg(not(loom))]
 pub(crate) mod batch;
+pub(crate) mod claim;
 #[cfg_attr(
     loom,
     allow(dead_code, reason = "the split-phase modes are not built under loom")
@@ -75,10 +81,12 @@ use crate::options::Schedule;
 use crate::outputs::OutputsView;
 use crate::pool::Rows;
 use crate::sys::Gang;
-use crate::sys::sync::{AtomicBool, AtomicUsize, Ordering};
+use crate::sys::sync::{AtomicBool, Ordering};
+
 use crate::transform::kernels::StackMode;
 use crate::transform::rows::{Shared, TransformRows};
 use crate::transform::stats::Moments;
+use claim::Cursors;
 
 use generations::HALVES;
 #[cfg(not(loom))]
@@ -677,12 +685,13 @@ pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usiz
 
 /// Runs `f` on every chunk of `size` instances of `all`, spread over the
 /// gang's workers, `size` instances per chunk, under `schedule`
-/// (invariant 2). `f` runs once per
+/// (invariant 2); `Dynamic` claims through `cursors`, the runtime's array,
+/// which only this function uses. `f` runs once per
 /// chunk; a panic in it is caught per chunk and the other chunks still run.
 /// Returns `true` if any chunk panicked. `dh` and `ch` are the discrete and
 /// continuous heads per agent.
 pub(crate) fn par_chunks<H, S, T, F>(
-    gang: &mut Gang,
+    (gang, cursors): (&mut Gang, &Cursors),
     all: Rows<'_, H, S, T>,
     (size, schedule): (usize, Schedule),
     heads: (usize, usize),
@@ -700,13 +709,13 @@ where
     let raw = RawChunk::new(all, heads.0, heads.1);
     let chunks = raw.instances.div_ceil(size.max(1));
     let panicked = AtomicBool::new(false);
-    // The Dynamic claim counter: in this frame, which outlives every worker's
-    // use of it because `gang.run` returns only after the job completes.
-    let next = AtomicUsize::new(0);
     let run = |c: usize, w: usize| {
         let range = chunk_range(c, size, raw.instances);
         // SAFETY: chunk `c` is run by this worker only (Static: `c % workers
-        // == w`; Dynamic: the claim counter handed `c` out once), and chunk
+        // == w`; Dynamic: its owner share's cursor handed `c` out once, and
+        // the cursors were reset before this job was published and after
+        // every worker of the previous job made its last access to that job,
+        // its `pending` decrement, `sys::gang` invariant 3), and chunk
         // ranges do not overlap (invariant 2); the pool is borrowed for the
         // whole epoch (invariant 3) and this view is dropped at the end of
         // the call (invariant 4).
@@ -717,27 +726,21 @@ where
             panicked.store(true, Ordering::Relaxed);
         }
     };
-    let job = |w: usize| {
-        if w >= workers {
-            return;
-        }
-        match schedule {
-            Schedule::Static => {
-                for c in (w..chunks).step_by(workers) {
-                    debug_assert!(c % workers == w, "chunk {c} is not worker {w}'s");
-                    run(c, w);
-                }
+    let gang_panicked = match schedule {
+        Schedule::Static => gang.run(&|w: usize| {
+            if w >= workers {
+                return;
             }
-            Schedule::Dynamic => loop {
-                let c = next.fetch_add(1, Ordering::Relaxed);
-                if c >= chunks {
-                    break;
-                }
+            for c in (w..chunks).step_by(workers) {
+                debug_assert!(c % workers == w, "chunk {c} is not worker {w}'s");
                 run(c, w);
-            },
+            }
+        })?,
+        Schedule::Dynamic => {
+            debug_assert_eq!(cursors.shares(), workers, "one cursor per worker");
+            cursors.run(gang, chunks, &run)?
         }
     };
-    let gang_panicked = gang.run(&job)?;
     Ok(gang_panicked || panicked.load(Ordering::Relaxed))
 }
 
@@ -877,21 +880,27 @@ mod tests {
         let done = AtomicUsize::new(0);
         let ran = AtomicUsize::new(0);
         let timed_out = AtomicBool::new(false);
-        let panicked = super::par_chunks(&mut gang, all, (1, schedule), (1, 0), |_, first| {
-            ran.fetch_add(1, Ordering::Relaxed);
-            if first == 0 {
-                let start = std::time::Instant::now();
-                while done.load(Ordering::Acquire) < N - 1 {
-                    if start.elapsed() > timeout {
-                        timed_out.store(true, Ordering::Relaxed);
-                        return;
+        let panicked = super::par_chunks(
+            (&mut gang, &super::Cursors::new(2)),
+            all,
+            (1, schedule),
+            (1, 0),
+            |_, first| {
+                ran.fetch_add(1, Ordering::Relaxed);
+                if first == 0 {
+                    let start = std::time::Instant::now();
+                    while done.load(Ordering::Acquire) < N - 1 {
+                        if start.elapsed() > timeout {
+                            timed_out.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                        std::thread::yield_now();
                     }
-                    std::thread::yield_now();
+                } else {
+                    done.fetch_add(1, Ordering::Release);
                 }
-            } else {
-                done.fetch_add(1, Ordering::Release);
-            }
-        })
+            },
+        )
         .unwrap();
         assert!(!panicked);
         (

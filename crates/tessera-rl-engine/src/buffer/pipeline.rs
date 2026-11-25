@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 
+use super::claim::Cursors;
 use super::{EnvRawChunk, HALVES, Raw, RawChunk, chunk_range};
 use crate::heuristic::{NO_FAULT, new_fault};
 use crate::masks::MaskProvider;
@@ -46,23 +47,24 @@ pub(crate) struct Ready {
 }
 
 /// The work of one half: its panic flag, the workers still running it,
-/// under `Schedule::Dynamic`, the half's own claim counter (ADR-0076), and
-/// the half's heuristic fault cell (ADR-0079, #347 stage B1): reset when
-/// the half is published, read when it is received.
+/// under `Schedule::Dynamic`, the half's own claim cursors (ADR-0087), one
+/// per worker, allocated with the mode, and the half's heuristic fault cell
+/// (ADR-0079, #347 stage B1): reset when the half is published, read when
+/// it is received.
 #[derive(Debug)]
 struct HalfWork {
     panicked: AtomicBool,
     remaining: AtomicUsize,
-    next: AtomicUsize,
+    cursors: Cursors,
     fault: crate::sys::sync::AtomicU64,
 }
 
-impl Default for HalfWork {
-    fn default() -> Self {
+impl HalfWork {
+    fn new(workers: usize) -> Self {
         Self {
             panicked: AtomicBool::new(false),
             remaining: AtomicUsize::new(0),
-            next: AtomicUsize::new(0),
+            cursors: Cursors::new(workers),
             fault: new_fault(),
         }
     }
@@ -136,7 +138,7 @@ where
             size: size.max(1),
             workers,
             schedule,
-            work: Default::default(),
+            work: core::array::from_fn(|_| HalfWork::new(workers)),
             jobs: placeholders(),
             live: Default::default(),
             in_flight: Default::default(),
@@ -256,9 +258,11 @@ unsafe fn run_half<E: Environment, M: MaskProvider<E>, const H: usize>(
             let start = r.start;
             // SAFETY: chunk `c` lies in half `H`, which only this job writes
             // (the half's token was consumed by `send`), and each chunk is
-            // run by one worker: Static by `c % workers`, Dynamic by the
-            // half's claim counter, reset in `publish` before this job was
-            // submitted (invariants 2, 3 and 4).
+            // run by one worker: Static by `c % workers`, Dynamic by its
+            // owner share's cursor of this half, reset in `publish` before
+            // this job was submitted and after every worker of the half's
+            // previous job decremented `remaining` (its last access to the
+            // half's cursors) (invariants 2, 3 and 4).
             // This worker's transform scratch is used by this view alone.
             let Some(mut chunk) = (unsafe { mode.raw.range_view_on(r, Some(worker)) }) else {
                 return;
@@ -273,16 +277,15 @@ unsafe fn run_half<E: Environment, M: MaskProvider<E>, const H: usize>(
                     run(c);
                 }
             }
-            Schedule::Dynamic => loop {
-                let c = first.saturating_add(work.next.fetch_add(1, Ordering::Relaxed));
-                if c >= last {
-                    break;
-                }
-                run(c);
-            },
+            // Chunk `first + l` is in owner share `l % workers`, as Static.
+            Schedule::Dynamic => work.cursors.claim(worker, last.saturating_sub(first), |l| {
+                run(first.saturating_add(l));
+            }),
         }
     }
-    // The last worker signals the waiter (Release: after its writes).
+    // The last worker signals the waiter (Release: after its writes). This
+    // decrement is each worker's last access to the half's cursors: only
+    // `publish`, after the token holder saw the ready flag, resets them.
     if work.remaining.fetch_sub(1, Ordering::AcqRel) == 1
         && let Some(flag) = mode.ready.ready.get(H)
     {
@@ -312,9 +315,11 @@ pub(crate) fn publish<E: Environment, M: MaskProvider<E>>(
     work.fault
         .store(NO_FAULT, crate::sys::sync::Ordering::Relaxed);
     work.remaining.store(gang.workers(), Ordering::Relaxed);
-    // Published with the job by `submit` (SeqCst), so every worker of this
-    // job starts claiming from the half's first chunk.
-    work.next.store(0, Ordering::Relaxed);
+    // Every worker of the half's previous job has decremented `remaining`
+    // (the token holder saw `ready`, set by the last one), so none can still
+    // claim; published with the job by `submit` (SeqCst), so every worker of
+    // this job starts each share from its first chunk (ADR-0087 point 6).
+    work.cursors.reset();
     ready.store(false, Ordering::Relaxed);
     // SAFETY: `job` and its data live in the `Arc` allocation, which the
     // caller keeps alive until the `wait` that returns this job (its `Drop`
