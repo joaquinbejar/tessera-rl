@@ -341,7 +341,7 @@ pub(super) const MAKERS: [FunctionRow; 21] = [
     ),
     FunctionRow::kw::<MakeGather>(
         c"make_gather",
-        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, items=None, max_steps=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100) -> Env",
+        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, items=None, max_steps=None, targets=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100, targets=False) -> Env",
     ),
     FunctionRow::kw::<MakeSnake>(
         c"make_snake",

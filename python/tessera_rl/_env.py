@@ -251,7 +251,7 @@ class Env:
         self.agents: int = layout["agents"]
         #: The adaptive config fields of a pool made with ``targets=True``,
         #: in a fixed order; empty otherwise.
-        self.adaptive_fields: tuple[str, ...] = tuple(layout["adaptive"])
+        self.adaptive_fields: tuple[str, ...] = tuple(layout.get("adaptive", ()))
         self.action_choices: int = layout["action_choices"]
         #: Inclusive ``(low, high)`` of a continuous environment's one float32
         #: head; ``None`` for a discrete one (``action_choices`` is then > 0).
