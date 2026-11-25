@@ -346,3 +346,16 @@ def test_device_default_does_not_import_torch():
     )
     p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False)
     assert p.returncode == 0, p.stderr
+
+
+def test_device_allocator_source_picks_the_containing_allocation():
+    backend = FakeBackend()
+    alloc = _cuda.PinnedAllocator(backend)
+    a, _owner_a = alloc.allocate(32768, 16384)
+    b, _owner_b = alloc.allocate(32768, 16384)
+    backend.handles[1][:] = 7
+    src = alloc.source(b + 100, 16)
+    assert src.tobytes() == bytes([7] * 16)
+    assert alloc.source(a, 16).tobytes() == bytes(16)
+    with pytest.raises(tessera_rl.TesseraError, match="outside"):
+        alloc.source(b + 32768 - 8, 16)
