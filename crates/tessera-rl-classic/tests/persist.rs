@@ -66,11 +66,11 @@ fn test_persist_grid_lanes_continues_and_matches_its_fixture() {
     support::check_fixture("persist-grid-lanes", env!("CARGO_MANIFEST_DIR"), &build, 4);
     assert_eq!(
         <GridLanes as Persist>::ENV_ID,
-        tessera_rl_classic::grid::lanes::ENV_ID
+        tessera_rl_classic::grid_lanes::ENV_ID
     );
     assert_eq!(
         <GridLanes as Persist>::ENV_VERSION,
-        tessera_rl_classic::grid::lanes::ENV_VERSION
+        tessera_rl_classic::grid_lanes::ENV_VERSION
     );
 }
 

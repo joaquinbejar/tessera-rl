@@ -7,8 +7,8 @@ use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::{AgentSlot, HeaderView, Heuristic, InvariantViolation, Phase, Validate};
 use tessera_rl_num::rng::StepRng;
 
-use super::super::GridConfig;
 use super::{GridLanes, GridLanesState, GridOutcome, outcome};
+use crate::grid::GridConfig;
 
 impl tessera_rl_core::Persist for GridLanes {
     const ENV_ID: &'static str = super::ENV_ID;

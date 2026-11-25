@@ -302,8 +302,8 @@ fn test_golden_grid_same_step_matches_fixture_on_every_mode() {
 }
 
 impl support::GoldenEnv for GridLanes {
-    const ENV_ID: &'static str = tessera_rl_classic::grid::lanes::ENV_ID;
-    const ENV_VERSION: u32 = tessera_rl_classic::grid::lanes::ENV_VERSION;
+    const ENV_ID: &'static str = tessera_rl_classic::grid_lanes::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::grid_lanes::ENV_VERSION;
 }
 
 /// Grid's golden scenario at 20 instances in chunks of 8: two full lane

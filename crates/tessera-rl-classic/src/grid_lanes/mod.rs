@@ -3,7 +3,7 @@
 //! `tessera/GridLanes-v1`: the reference grid world on a lane-wise state, the
 //! first shipped fixed-point `LaneEnvironment` (ADR-0090 stage 2, #345).
 //!
-//! Its dynamics are [`Grid`](super::Grid)'s, step for step: the same moves,
+//! Its dynamics are [`Grid`](crate::grid::Grid)'s, step for step: the same moves,
 //! walls, rewards and episode ends, and the same observation bytes. Only the
 //! state differs: one column per field (Struct-of-Arrays), so groups of
 //! eight instances step through [`LaneEnvironment::step_lanes`] on
@@ -27,7 +27,7 @@ use tessera_rl_num::Fx32;
 use tessera_rl_num::rng::{ObsRng, StepRng};
 use tessera_rl_simd::Resolved;
 
-use super::{GridConfig, GridObs, layout};
+use crate::grid::{GridConfig, GridObs, layout};
 
 /// Environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/GridLanes-v1";

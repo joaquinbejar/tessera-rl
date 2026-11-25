@@ -12,8 +12,8 @@ use tessera_rl_num::Fx32;
 use tessera_rl_num::math::lane_int::{Fx32Lanes, I32Lanes};
 use tessera_rl_simd::{LaneKernel, Lanes, Resolved};
 
-use super::super::GridConfig;
 use super::{GridOutcome, ONE, outcome};
+use crate::grid::GridConfig;
 
 /// The group's columns.
 pub(super) struct Columns<'a> {

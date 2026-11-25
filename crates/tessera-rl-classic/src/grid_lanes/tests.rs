@@ -15,8 +15,8 @@ use tessera_rl_core::{Asset, EpisodeEnd, LANES, LaneEnvironment, LaneOut};
 use tessera_rl_num::Fx32;
 use tessera_rl_simd::Resolved;
 
-use super::super::GridConfig;
 use super::{Ending, GridLanes, GridLanesState, GridOutcome, LANE_STEPS, pixels, transition};
+use crate::grid::GridConfig;
 
 const ROOMS: &[u8] =
     b"....#...\n....#...\n........\n....#...\n###.####\n....#...\n........\n....#...\n";
