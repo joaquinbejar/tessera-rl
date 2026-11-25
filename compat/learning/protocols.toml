@@ -89,7 +89,11 @@ hyper = {}
 # collector gets all 8 items through the same gym and flattening paths (#593).
 # Tier T1s (#595): T1's training unchanged, with a sampled evaluation
 # (learning_sampled). The budget stays T1's 150k, pre-declared, with one
-# pilot and no tuning loop; no calibration yet, so no nightly gate.
+# pilot and no tuning loop. Calibrated on the nightly host (main 76067fb9):
+# median 5.2 against 4.55 for random, 39 of 40 seeds above it, but learns
+# false (gap 0.65, 95% interval [-0.125, 1.4] against 0.345 required). So no
+# calibration file and no nightly gate; changing the evaluation episodes
+# after this result would be a tuning loop.
 [gather]
 env = "tessera/Gather-v1"
 tier = "T1s"
