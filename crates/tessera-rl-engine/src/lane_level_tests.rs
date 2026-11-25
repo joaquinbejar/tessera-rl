@@ -243,6 +243,15 @@ impl tessera_rl_core::Environment for SoaProbe {
 }
 
 #[test]
+fn test_row_lane_hook_is_none_for_a_lane_wise_state() {
+    // ADR-0090 (erratum, #345 head 3): SoaProbe sets LANE_STEP over a
+    // lane-wise state; the row arm must never take it, or it would walk an
+    // empty row store and step no instance.
+    assert!(crate::pool::row_lane_hook::<SoaProbe>().is_none());
+    assert!(crate::pool::row_lane_hook::<Probe<1, false, DISCRETE, true>>().is_some());
+}
+
+#[test]
 fn test_lane_level_lane_wise_state_has_none() {
     let pool = EnvPool::<SoaProbe>::new(UnitConfig {}, options())
         .unwrap_or_else(|e| panic!("construction failed: {e}"));

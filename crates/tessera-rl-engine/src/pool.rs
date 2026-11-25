@@ -15,7 +15,7 @@ use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
     ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, EnvState, Environment, EpisodeEnd,
-    LANES, LaneOut, LaneTuple, RecordLayout, StateInit, StepOut, TurnStructure,
+    LANES, LaneHook, LaneOut, LaneTuple, RecordLayout, StateInit, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
@@ -538,6 +538,12 @@ where
             assert!(
                 <E::Header as RecordLayout>::AGENTS == E::MAX_AGENTS,
                 "Environment::Header must have MAX_AGENTS agent rows"
+            );
+            // A lane-wise state keeps no rows, so a lane step would step
+            // nothing (ADR-0090 (erratum, #345 head 3)).
+            assert!(
+                !(E::State::LANES && E::LANE_ENV.is_some() && E::LANE_STEP.is_some()),
+                "a lane-wise state sets LANE_ENV, never also LANE_STEP (ADR-0090 (erratum, #345 head 3))"
             );
         }
         cfg.validate()?;
@@ -1808,9 +1814,9 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
     // the whole chunk replaces the per-instance fills (issue #152, G1). No
     // write to instance `i`'s rows happens between this clear and its turn.
     clear_chunk(outputs, headers.len());
-    if let (Some(level), Some(hook)) = (lanes, E::LANE_STEP) {
-        // Aligned groups of `LANES` of the row store (a lane step implies
-        // Array-of-Structs states, checked by `lane_level`); tails and
+    if let (Some(level), Some(hook)) = (lanes, row_lane_hook::<E>()) {
+        // Aligned groups of `LANES` of the row store, which only an
+        // Array-of-Structs state has (`row_lane_hook`); tails and
         // ineligible groups take the scalar step (ADR-0071 decision 3).
         let mut base = 0;
         for (hs, ss) in headers.chunks_mut(LANES).zip(states.chunks_mut(LANES)) {
@@ -2017,6 +2023,14 @@ fn lane_ready<E: Environment>(headers: &[E::Header]) -> bool {
     headers
         .iter()
         .all(|h| !h.engine().pending_reset.get() && h.agents().iter().all(|row| row.alive.get()))
+}
+
+/// The row store's lane step (ADR-0071): `None` for a lane-wise state, whose
+/// row store is empty, so the `LANE_STEP` arm can never walk it and step
+/// nothing (ADR-0090 (erratum, #345 head 3)).
+#[must_use]
+pub(crate) const fn row_lane_hook<E: Environment>() -> Option<LaneHook<E>> {
+    if E::State::LANES { None } else { E::LANE_STEP }
 }
 
 /// The lane path's level for a pool, or `None` when the environment has no
