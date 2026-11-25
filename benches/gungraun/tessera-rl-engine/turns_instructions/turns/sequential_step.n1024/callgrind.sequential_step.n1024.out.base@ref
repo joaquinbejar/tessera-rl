@@ -1,8 +1,8 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 5969
-cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-67e1afef630a8e78 --gungraun-run d:d:000000 00000 00001 00000
+pid: 5988
+cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-13b5ff2097533add --gungraun-run d:d:000000 00000 00001 00000
 part: 1
 thread: 1
 
@@ -11,105 +11,36 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 490021
+desc: Timerange: Basic block 0 - 569952
 desc: Trigger: Program termination
 
 positions: line
 events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-summary: 986334 243335 209298 146 5347 1485 143 1
+summary: 1053836 263104 226005 192 5387 1587 189 1 1
 
 
-ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-67e1afef630a8e78
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-13b5ff2097533add
 fl=???
-fn=main
-cfn=std::rt::lang_start_internal
-calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
-
-fn=std::rt::lang_start::<()>::{closure#0}
-cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
-
-fn=<tessera_rl_num::fp::FpGuard>::enter
-0 26 6 6
-
-fn=<tessera_rl_engine::outputs::Outputs>::view_all
-0 146 26 93 0 9 10
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=2 211 
-0 73 19 17 0 1 4
-0 4 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=2 211 
-0 73 19 17 0 0 4
-0 49 25 22 0 0 4
-
 fn=turns_instructions::main
 cfn=turns_instructions::turns::__run
 calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
+0 1053836 263104 226005 192 5387 1587 189 1 1
 
 fn=turns_instructions::turns::__run
 cfn=turns_instructions::sequential_step::__run_n1024
 calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
+0 1053836 263104 226005 192 5387 1587 189 1 1
 
 fn=turns_instructions::sequential_step::__run_n1024
 cfn=turns_instructions::sequential_step::__gungraun_wrapper_id_mod_n1024::n1024
 calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
+0 1053836 263104 226005 192 5387 1587 189 1 1
 
-fn=tessera_rl_engine::pool::observe_rows::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked, false>
-0 108544 10240 53248 0 0 5
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 2048
-0 33792 14336 7168 0 0 209
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 2048
-0 80896 10240 35840
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 2048
-0 28672 8192 3072
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 2048
-0 10240 7168
+fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+0 24 8 6
 
-fn=turns_instructions::sequential_step::__gungraun_wrapper_id_mod_n1024::n1024
-cfn=turns_instructions::sequential_step::__gungraun_wrapper_mod::sequential_step
-calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
-
-fn=tessera_rl_engine::pool::step_chunk::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>
-0 26 10 13 2 0 0 2
-cfn=tessera_rl_engine::pool::clear_chunk
-calls=1 0 
-0 42646 82 41748 0 5 835
-0 184340 55301 30728 17 1036 38 17
-cfn=tessera_rl_engine::pool::first_illegal_flat
-calls=1024 0 
-0 36864 7168 3072 2 194 0 2
-0 123904 50176 13312 13 384 195 13
-cfn=tessera_rl_engine::pool::observe_rows::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked, false>
-calls=1024 0 
-0 331776 54272 107520 0 0 214
-0 19464 10247 0 4 0 0 4
+fn=<tessera_rl_num::fp::FpGuard>::enter
+0 26 6 6
 
 fn=tessera_rl_engine::pool::clear_chunk
 0 21 4 8
@@ -117,7 +48,7 @@ cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=2 199 
-0 239 2 128 0 1 33
+0 239 2 128 0 1 32
 0 6 3 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
@@ -154,18 +85,18 @@ cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=2 199 
 0 4115 3 4096 0 0 64
-0 23 6 1 0 3
+0 23 6 1 0 2
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=2 199 
-0 16403 3 16384 0 0 257
+0 16403 3 16384 0 0 256
 0 13 9 1 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=2 199 
-0 127 2 64 0 0 17
+0 127 2 64 0 0 16
 0 6 3 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
@@ -190,118 +121,207 @@ cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=2 199 
 0 4115 3 4096 0 0 64
-0 2 1
+0 2 1 0 0 1
 
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
-0 26 8 11 4 0 3 4
-cfn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<2, tessera_rl_core::header::NoAdaptive>>
-calls=1 0 
-0 231515 62487 12319 32 2534 135 29 1
-0 75 28 31 7 9 8 7
-cfn=<tessera_rl_engine::outputs::Outputs>::view_all
-calls=1 0 
-0 345 89 150 0 10 22
-0 434 214 217 54 1 12 54
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 4 0 2
-cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step_inner::{closure#2}>
-calls=1 0 
-0 739033 177262 196397 39 1620 1282 39
-0 3 1 2 1 1 1 1
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 14351 3075 1 3 1154 1 3
-
-fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step_inner::{closure#2}>
-0 9 4 3 1 0 0 1
-cfn=tessera_rl_engine::pool::step_chunk::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>
-calls=1 0 
-0 739020 177256 196393 38 1619 1282 38
-0 4 2 1 0 1
-
-fn=(below main)
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./csu/../csu/libc-start.c
-cfn=__libc_start_main@@GLIBC_2.34
-calls=1 242 
-0 986334 243335 209298 146 5347 1485 143 1
-
-fn=std::rt::lang_start_internal
-cfn=std::rt::lang_start::<()>::{closure#0}
-calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
-
-fn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<2, tessera_rl_core::header::NoAdaptive>>
-0 127056 34831 5150 19 2148 5 19 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1024 211 
-0 12288 3072 2048 2 129 129
-0 21504 7168 1024 2 0 0 2
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1024 211 
-0 10240 1024
-0 28672 8192 2048 5 257 0 5
+fn=tessera_rl_engine::pool::observe_rows::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked, false>
+0 217088 24576 97280 0 1 9
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
-calls=1024 199 
-0 15360 1024 2048
-0 16395 7176 1 4 0 1 3
+calls=4096 199 
+0 34816 2048 4096
+0 100352 34816 16384 1 1 229
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=4096 199 
+0 34816 2048 4096
+0 22528 11264 2048
 
-fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-cfn=turns_instructions::main
-calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
+fn=<tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::finish_privileged
+0 16 7 6 0 1 1
 
-fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-0 24 8 6
+fn=tessera_rl_engine::pool::first_illegal_flat
+0 36864 7168 3072 3 194 0 3
 
 fn=turns_instructions::sequential_step::__gungraun_wrapper_mod::sequential_step
-0 11 1 6 2 0 1 2
+0 12 1 7 1 0 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=1 211 
-0 217 67 65 0 0 1
-0 15 7 7 1 0 1 1
+0 397 127 125 0 0 28
+0 23 10 10 3 0 0 3
 cfn=<tessera_rl_num::fp::FpGuard>::enter
 calls=1 0 
 0 13 3 3
 0 6 0 2 1 0 0 1
 cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
 calls=1 0 
-0 985811 243171 209136 140 5329 1464 137 1
+0 1052943 262815 225720 181 5354 1527 178 1
 0 3 1 2 0 1
 cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
 calls=1 0 
 0 12 4 3
-0 19 8 6 1 2 1 1
+0 21 9 5 4 3 1 4
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=1 211 
-0 217 67 65 0 15 17
-0 10 6 3 1 0 0 1
+0 395 127 125 2 29 31 2 0 1
+0 11 7 3
 
-fn=tessera_rl_engine::pool::first_illegal_flat
-0 36864 7168 3072 2 194 0 2
+fn=tessera_rl_engine::pool::step_chunk_at::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>
+0 16 3 8 2 0 0 2
+cfn=tessera_rl_engine::pool::clear_chunk
+calls=1 0 
+0 42646 82 41748 0 5 832
+0 179233 52234 27661 21 1037 38 21
+cfn=tessera_rl_engine::pool::first_illegal_flat
+calls=1024 0 
+0 36864 7168 3072 3 194 0 3
+0 99328 45056 9216 11 385 0 11
+cfn=tessera_rl_engine::pool::observe_rows::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked, false>
+calls=1024 0 
+0 409600 74752 123904 1 2 238
+0 32776 12295 5120 5 2 192 5
+
+fn=(below main)
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./csu/../csu/libc-start.c
+cfn=__libc_start_main@@GLIBC_2.34
+calls=1 242 
+0 1053836 263104 226005 192 5387 1587 189 1 1
+
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
+calls=1 0 
+0 1053836 263104 226005 192 5387 1587 189 1 1
+
+fn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<2, tessera_rl_core::header::NoAdaptive>>
+0 140391 40989 8234 23 2151 5 23 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1024 211 
+0 12288 3072 2048 2 129 128
+0 13312 6144 1024 1 0 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1024 211 
+0 10240 1024
+0 23552 8192 1024 6 257 0 6
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=1024 199 
+0 15360 1024 2048
+0 21515 7176 1 4 1 1 4
+
+fn=<tessera_rl_engine::outputs::Outputs>::view_all
+0 118 9 82 0 6 12
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=2 211 
+0 85 23 21 0 6 6
+0 40 18 19 0 5 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=2 211 
+0 73 19 17 0 0 4
+0 4 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=2 211 
+0 73 19 17 0 0 3
+0 73 30 40 0 0 7
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
+0 36 11 17 5 0 5 5
+cfn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<2, tessera_rl_core::header::NoAdaptive>>
+calls=1 0 
+0 236658 67621 14379 36 2538 134 34 1
+0 7 1 1 1 0 0 1
+cfn=<tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::finish_privileged
+calls=1 0 
+0 16 7 6 0 1 1
+0 106 37 32 14 12 7 14
+cfn=tessera_rl_engine::pool::step_view
+calls=1 0 
+0 515 131 216 6 19 33 6
+0 257 129 125 31 2 16 31
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 85 23 21 0 0 5
+0 284 139 141 36 0 16 36
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 85 23 21 0 0 5
+0 31 12 16 3 0 2 3
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 4 0 2 1 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step_inner::{closure#5}>
+calls=1 0 
+0 800477 191596 210733 44 1625 1300 43
+0 3 1 2 0 1 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 14354 3077 2 4 1156 2 4
+
+fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+cfn=turns_instructions::main
+calls=1 0 
+0 1053836 263104 226005 192 5387 1587 189 1 1
+
+fn=tessera_rl_engine::pool::step_view
+0 11 1 6 2 1 0 2
+cfn=<tessera_rl_engine::outputs::Outputs>::view_all
+calls=1 0 
+0 466 118 197 0 17 33
+0 38 12 13 4 1 0 4
+
+fn=main
+cfn=std::rt::lang_start_internal
+calls=1 0 
+0 1053836 263104 226005 192 5387 1587 189 1 1
+
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 1053836 263104 226005 192 5387 1587 189 1 1
+
+fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>>::step_inner::{closure#5}>
+0 10 4 3 1 0 0 1
+cfn=tessera_rl_engine::pool::step_chunk_at::<turns_instructions::race::RaceEnv, tessera_rl_engine::masks::Masked>
+calls=1 0 
+0 800463 191590 210729 43 1625 1300 42
+0 4 2 1
+
+fn=turns_instructions::sequential_step::__gungraun_wrapper_id_mod_n1024::n1024
+cfn=turns_instructions::sequential_step::__gungraun_wrapper_mod::sequential_step
+calls=1 0 
+0 1053836 263104 226005 192 5387 1587 189 1 1
 
 ob=/usr/lib/x86_64-linux-gnu/libc.so.6
 fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 fn=memcpy@GLIBC_2.2.5
-211 2052
-217 2052
-218 2052
-220 4 4 0 0 1
-221 4
-222 4
+211 2055
+217 2055
+218 2055
+220 7 7 0 0 1
+221 7
+222 7
 308 2048 0 0 1
 309 2048
 311 2048
@@ -311,63 +331,101 @@ fn=memcpy@GLIBC_2.2.5
 325 1024 1024
 331 1024 1024 0 1 129
 332 1024 1024
-333 1024 0 1024 0 0 129
+333 1024 0 1024 0 0 128
 334 1024 0 1024
 335 1024 1024
-392 4
-393 4
-417 4
-418 4
-422 4
-424 4
-428 4 4 0 0 2
-429 4
-440 4
-443 4
-445 4
-447 4
-451 4
-452 4
-461 4 4
-462 4 4 0 0 1
-464 4
-466 4
-467 4 4
-468 4 4
-471 4
-473 4
-475 4
-477 8
-483 4 4
-484 4 4
-485 4 4
-486 4 4 0 0 1
-487 4
-488 4 0 4 0 0 1
-489 4 0 4
-490 4 0 4 0 0 2
-491 4 0 4
-492 4
-493 4
-494 4
-483 32 32
-484 32 32
-485 32 32
-486 32 32 0 0 11
-487 32
-488 32 0 32 0 0 14
-489 32 0 32
-490 32 0 32 0 0 4
-491 32 0 32
-492 32
-493 32
-494 32
-496 4 0 4 0 0 3
-497 4 0 4
-498 4 0 4
-499 4 0 4
-501 4 0 4 0 0 2
-505 4 4
+392 7
+393 7
+417 7
+418 7
+422 7
+424 7
+428 7 7 0 0 2
+429 7
+440 7
+443 7
+445 7
+447 7
+451 7
+452 7
+461 6 6
+462 6 6
+464 6
+466 6
+467 6 6
+468 6 6 0 0 1
+471 6
+473 6
+475 6
+477 12
+483 6 6 0 0 1
+484 6 6
+485 6 6
+486 6 6
+487 6
+488 6 0 6 0 0 1
+489 6 0 6 0 0 1
+490 6 0 6 0 0 3
+491 6 0 6
+492 6
+493 6
+494 6
+483 42 42 0 0 2
+484 42 42
+485 42 42
+486 42 42
+487 42
+488 42 0 42 0 0 3
+489 42 0 42 0 0 31
+490 42 0 42 0 0 7
+491 42 0 42
+492 42
+493 42
+494 42
+496 6 0 6 0 0 4
+497 6 0 6
+498 6 0 6
+499 6 0 6
+501 6 0 6 0 0 1
+505 6 6
+518 1 1 0 1 0 0 1
+519 1 1 0 0 1
+521 1
+522 1 1
+523 1 1
+525 1
+527 1
+529 2
+535 1 1
+536 1 1
+537 1 1
+538 1 1
+539 1 0 0 1 0 0 1
+540 1 0 1 0 0 1
+541 1 0 1
+542 1 0 1 0 0 1
+543 1 0 1
+544 1
+545 1
+546 1
+535 29 29 0 0 27
+536 29 29
+537 29 29
+538 29 29
+539 29
+540 29 0 29
+541 29 0 29
+542 29 0 29 0 0 29 0 0 1
+543 29 0 29
+544 29
+545 29
+546 29
+548 1 0 1
+549 1 0 1
+550 1 0 1
+551 1 0 1
+553 1 0 1
+554 1 1
 
 fl=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 fn=__memset_sse2_unaligned_erms
@@ -378,35 +436,35 @@ fn=__memset_sse2_unaligned_erms
 208 13
 229 13 13 0 0 1
 230 13
-236 7 0 7 0 0 2
+236 7 0 7 0 0 7
 237 7 0 7
 249 7
 252 7
 253 7
-265 7 0 7 0 0 7
+265 7 0 7
 266 7 0 7
 279 7
 280 7
 282 7
 285 7
 288 14
-291 7 0 7
+291 7 0 7 0 0 7
 292 7 0 7
-293 7 0 7 0 0 7
+293 7 0 7
 294 7 0 7
 295 7
 296 7
 297 7
-291 171 0 171
+291 171 0 171 0 0 171
 292 171 0 171
-293 171 0 171 0 0 171
+293 171 0 171
 294 171 0 171
 295 171
 296 171
 297 171
-300 7 0 7
+300 7 0 7 0 0 7
 301 7 0 7
-302 7 0 7 0 0 7
+302 7 0 7
 303 7 0 7
 308 7 7
 321 6 6
@@ -414,7 +472,7 @@ fn=__memset_sse2_unaligned_erms
 323 6
 324 6
 325 6
-326 40966 0 40960 0 0 641
+326 40966 0 40960 0 0 640
 329 6
 333 6 6
 354 5120
@@ -433,26 +491,26 @@ fn=__memset_sse2_unaligned_erms
 
 fl=./csu/../sysdeps/nptl/libc_start_call_main.h
 fn=(below main)
-cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-67e1afef630a8e78
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-13b5ff2097533add
 cfi=???
 cfn=main
 calls=1 0 
-58 986334 243335 209298 146 5347 1485 143 1
+58 1053836 263104 226005 192 5387 1587 189 1 1
 
 fl=./csu/../csu/libc-start.c
 fn=__libc_start_main@@GLIBC_2.34
 cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
 cfn=(below main)
 calls=1 29 
-360 986334 243335 209298 146 5347 1485 143 1
+360 1053836 263104 226005 192 5387 1587 189 1 1
 
 ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 fl=???
 fn=0x000000000001d2c0
-cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-67e1afef630a8e78
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/turns_instructions-13b5ff2097533add
 cfi=???
 cfn=(below main)
 calls=1 0 
-0 986334 243335 209298 146 5347 1485 143 1
+0 1053836 263104 226005 192 5387 1587 189 1 1
 
-totals: 986334 243335 209298 146 5347 1485 143 1
+totals: 1053836 263104 226005 192 5387 1587 189 1 1
