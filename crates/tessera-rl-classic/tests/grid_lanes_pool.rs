@@ -272,6 +272,11 @@ fn differential(cfg: &GridConfig, case: Case) {
             let into_rows = rows.decode(&from_lanes, DecodeLimits::default()).unwrap();
             lanes.import_all(&into_lanes).unwrap();
             rows.import_all(&into_rows).unwrap();
+            // Grid takes the same calls (its own records), so the three pools
+            // see the same sequence: an import refreshes the output buffers.
+            let from_grid = grid.encode(&ids).unwrap();
+            let into_grid = grid.decode(&from_grid, DecodeLimits::default()).unwrap();
+            grid.import_all(&into_grid).unwrap();
             let r = grid.snapshot(0).unwrap();
             let rec = DecodedRecord::from_parts(*r.header(), of_grid(*r.state())).unwrap();
             lanes.import(&[0], &[rec]).unwrap();
@@ -279,6 +284,7 @@ fn differential(cfg: &GridConfig, case: Case) {
                 DecodedRecord::from_parts(*r.header(), GridRowsState::of(of_grid(*r.state())))
                     .unwrap();
             rows.import(&[0], &[rec]).unwrap();
+            grid.import(&[0], &[DecodedRecord::from(r)]).unwrap();
         }
     }
     store_match(&lanes, &rows, case.n, &ctx);
