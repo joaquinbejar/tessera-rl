@@ -335,6 +335,9 @@ jobs:
       - run: cargo doc --workspace --no-deps --all-features --locked
         env:
           RUSTDOCFLAGS: -D warnings
+      # The private-item docs of the crates with audited `unsafe`, where the
+      # SAFETY arguments live (make doc-private).
+      - run: make doc-private
 
   readme:
     runs-on: [self-hosted, linux-x64]

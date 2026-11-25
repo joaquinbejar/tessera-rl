@@ -5,7 +5,7 @@
 //! `register_host_factory!(E)` records a [`HostFactory`] for `E` in an
 //! `inventory` list of the engine; [`make_host`] finds the factory of an
 //! id, decodes the environment's config from a
-//! [`ConfigSource`](tessera_rl_core::ConfigSource) with the shared decoder
+//! [`ConfigSource`] with the shared decoder
 //! ([`ConfigDecode`]) and builds a `HostPool<E, A>` behind
 //! [`DynHostPool`].
 //!
@@ -224,7 +224,7 @@ pub fn make_host(
     }
 }
 
-/// Registers `E`'s host factory for [`make_host`](crate::make_host)
+/// Registers `E`'s host factory for [`make_host`]
 /// (ADR-0065 item 3). With `snapshots`, `E` implements `HostSnapshot`
 /// and the pools it makes have snapshots through `DynHostPool` (ADR-0073). `E::Config` must implement `ConfigDecode` (derive
 /// `EnvConfig`); without it, the expansion does not compile.
