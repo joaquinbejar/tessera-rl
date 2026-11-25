@@ -6,6 +6,7 @@ import json
 import pathlib
 import shutil
 import sys
+import tomllib
 
 import pytest
 
@@ -15,6 +16,7 @@ sys.path.insert(0, str(_DIR))
 _spec = importlib.util.spec_from_file_location("dashboard_build", _DIR / "build.py")
 build = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build)
+import flagships
 import grouping
 import render
 import schema
@@ -373,3 +375,92 @@ def test_check_fails_on_invalid_file(root):
 
 def test_check_passes_on_committed_results():
     assert build.check(_ROOT) == 0
+
+
+# -- the flagship table (#640) ---------------------------------------------------
+
+FLAGSHIP_FIXTURE = _ROOT / "tests" / "python" / "fixtures" / "dashboard" / "flagship-indicative.json"
+LANTERNS = "tessera/Lanterns-v1"
+
+
+def flagship_root(root):
+    shutil.copy(FLAGSHIP_FIXTURE, root / "benchmarks/results" / "f.json")
+    return root
+
+
+def flagship_page(root):
+    return (build.build(root) / flagships.PAGE).read_text()
+
+
+def test_flagships_fixture_is_indicative_not_invalid(root):
+    (entry,) = st.load(flagship_root(root))
+    assert entry.status == st.INDICATIVE
+
+
+def test_flagships_rows_cover_every_metric_with_machine_status(root):
+    entries = st.load(flagship_root(root))
+    _, _, machines = build.inputs(root)
+    got = flagships.rows(entries, machines)
+    by = {(r["configuration"], r["metric"]): r for r in got}
+    assert set(by) == {
+        ("rust/lanterns/inline/n1024", "throughput: samples"),
+        ("rust/lanterns/sync4/n1024", "throughput: samples"),
+        ("rust/lanterns/n1024/snapshot", "snapshot: fork_with_reobserve"),
+        ("rust/lanterns/n1024/memory", "memory: record_bytes_per_instance"),
+        ("rust/lanterns/n1024/memory", "memory: mask_bytes_per_step"),
+        ("scaling_efficiency/lanterns/sync4/n1024", "scaling_efficiency"),
+    }
+    assert all(r["flagship"] == LANTERNS for r in got)
+    # The status is the current compat/machines.toml one, never a claim.
+    assert {r["machine_status"] for r in got} == {machines["ref-x86"]["status"]}
+    assert not any(r["valid_for_claims"] for r in got)
+    assert by[("rust/lanterns/sync4/n1024", "throughput: samples")]["schedule"] == "static"
+    assert by[("scaling_efficiency/lanterns/sync4/n1024", "scaling_efficiency")]["workers"] == 4
+    assert by[("rust/lanterns/n1024/memory", "memory: mask_bytes_per_step")]["ci95"] is None
+
+
+def test_flagships_page_has_columns_numbers_and_no_other_config(root):
+    text = flagship_page(flagship_root(root))
+    for column in ("Flagship", "Configuration", "Metric", "Median", "95% CI", "Machine", "Machine status", "Commit", "valid_for_claims"):
+        assert f"<th>{column}</th>" in text
+    assert "3600.0" in text and "3400.0 to 3800.0" in text and flagships.EXACT in text
+    assert "<td>false</td>" in text and "<td>true</td>" not in text
+    assert "424242.0" not in text  # not a flagship configuration
+    assert "424242.0" not in index(root)  # indicative: never on the index
+
+
+def test_flagships_page_unlisted_machine_is_marked(root):
+    doc = json.loads(FLAGSHIP_FIXTURE.read_text())
+    doc["report"]["environment"]["machine"] = "ref-gone"
+    doc["report_sha256"] = schema.report_hash(doc["report"])
+    put(root, "g.json", doc)
+    assert flagships.UNLISTED in flagship_page(root)
+
+
+def test_flagships_page_empty_and_invalid_rows_absent(root):
+    assert flagships.NONE in flagship_page(root)
+    doc = json.loads(FLAGSHIP_FIXTURE.read_text())
+    doc["report"]["environment"]["software"]["git_dirty"] = True
+    doc["report_sha256"] = schema.report_hash(doc["report"])
+    put(root, "d.json", doc)
+    assert flagships.NONE in flagship_page(root)
+
+
+def test_flagships_configs_record_schedule_and_one_n():
+    spec = tomllib.loads((_ROOT / "tools/bench/configs.toml").read_text(encoding="utf-8"))
+    flag = [c for c in spec["config"] if c.get("flagship")]
+    assert {c["flagship"] for c in flag} == {
+        "tessera/RTS-v1", "tessera/LimitOrderBook-v1", LANTERNS,
+        "tessera/Survival-v1", "tessera/JobShop-v1", "tessera/Vrp-v1",
+    }  # fmt: skip
+    for fid in {c["flagship"] for c in flag}:
+        mine = [c for c in flag if c["flagship"] == fid]
+        assert len({c["num_envs"] for c in mine}) == 1, fid
+        assert len({c["env"] for c in mine}) == 1, fid
+        kinds = {(c["metric"], c.get("workers", 0)) for c in mine}
+        assert kinds == {("throughput", 0), ("throughput", 4), ("throughput", "full"), ("snapshot", 0), ("memory", 0)}, fid
+    for c in spec["config"]:
+        if c.get("kind") == "rust" and c.get("workers", 0) != 0:
+            assert c.get("schedule") in ("static", "dynamic"), c["name"]
+    derived = {d["multi"] for d in spec["derived"] if d["kind"] == "scaling"}
+    assert {c["name"] for c in flag if c.get("workers", 0) != 0} <= derived

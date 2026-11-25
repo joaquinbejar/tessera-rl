@@ -1,0 +1,313 @@
+{
+  "admitted_by": {
+    "approved_by": [
+      "reviewer"
+    ],
+    "pr": 1
+  },
+  "kind": "wall",
+  "measured_at": "2026-01-01T00:00:00Z",
+  "report": {
+    "claim_check": {
+      "reasons": [
+        "synthetic"
+      ],
+      "valid": false
+    },
+    "derived": {
+      "scaling_efficiency/lanterns/sync4/n1024": {
+        "ci95": [
+          0.85,
+          0.95
+        ],
+        "from": [
+          "rust/lanterns/sync4/n1024",
+          "rust/lanterns/inline/n1024"
+        ],
+        "same_work": true,
+        "value": 0.9
+      }
+    },
+    "environment": {
+      "hardware": {
+        "arch": "x86_64",
+        "cpu": "Intel Core i7-12700H",
+        "frequency_policy": "performance",
+        "logical_cpus": 20,
+        "os": "Linux"
+      },
+      "machine": "ref-x86",
+      "machine_record": {
+        "cpu_id": "i7-12700H",
+        "status": "candidate"
+      },
+      "software": {
+        "git": "ffffffffffffffffffffffffffffffffffffffff",
+        "git_dirty": false,
+        "native_build_profile": "release",
+        "numpy": "2",
+        "python": "3.11",
+        "rustc": "r",
+        "tessera_rl": "0"
+      }
+    },
+    "load_average": {
+      "after": [
+        0.0
+      ],
+      "before": [
+        0.0
+      ]
+    },
+    "method": {
+      "batches": 2000,
+      "rep_s": 1.0,
+      "reps": 10,
+      "runs_for_claims": 10,
+      "warmup_s": 2.0
+    },
+    "pinning": {
+      "applied": true,
+      "cpu_set": [
+        2,
+        4,
+        6,
+        8
+      ]
+    },
+    "qualification": null,
+    "quick": false,
+    "results": {
+      "rust/cartpole/inline/n1024": {
+        "config": {
+          "env": "cartpole",
+          "kind": "rust",
+          "metric": "throughput",
+          "name": "rust/cartpole/inline/n1024",
+          "num_envs": 1024,
+          "workers": 0
+        },
+        "metric": "throughput",
+        "runs": [
+          {
+            "cpu": "Intel Core i7-12700H",
+            "method": {
+              "reps": 10,
+              "warmup_s": 2.0
+            },
+            "options": {
+              "seed": 1
+            },
+            "pinning": {
+              "process_affinity": "2"
+            },
+            "plan_fingerprint": "ab",
+            "profile": "release",
+            "samples": {
+              "ci95": [
+                900.0,
+                1100.0
+              ],
+              "median": 424242.0,
+              "n": 10,
+              "samples": []
+            }
+          }
+        ],
+        "samples": {
+          "ci95": [
+            900.0,
+            1100.0
+          ],
+          "median": 424242.0,
+          "n": 10,
+          "samples": []
+        }
+      },
+      "rust/lanterns/inline/n1024": {
+        "config": {
+          "env": "lanterns",
+          "flagship": "tessera/Lanterns-v1",
+          "kind": "rust",
+          "legal_actions": true,
+          "metric": "throughput",
+          "name": "rust/lanterns/inline/n1024",
+          "num_envs": 1024,
+          "workers": 0
+        },
+        "metric": "throughput",
+        "runs": [
+          {
+            "cpu": "Intel Core i7-12700H",
+            "method": {
+              "reps": 10,
+              "warmup_s": 2.0
+            },
+            "options": {
+              "seed": 1
+            },
+            "pinning": {
+              "process_affinity": "2"
+            },
+            "plan_fingerprint": "ab",
+            "profile": "release",
+            "samples": {
+              "ci95": [
+                900.0,
+                1100.0
+              ],
+              "median": 1000.0,
+              "n": 10,
+              "samples": []
+            }
+          }
+        ],
+        "samples": {
+          "ci95": [
+            900.0,
+            1100.0
+          ],
+          "median": 1000.0,
+          "n": 10,
+          "samples": []
+        },
+        "schedule": null,
+        "workers": 0
+      },
+      "rust/lanterns/n1024/memory": {
+        "config": {
+          "env": "lanterns",
+          "flagship": "tessera/Lanterns-v1",
+          "kind": "rust",
+          "metric": "memory",
+          "name": "rust/lanterns/n1024/memory",
+          "num_envs": 1024
+        },
+        "mask_bytes_per_step": 102400,
+        "metric": "memory",
+        "output_storage_bytes": 4096,
+        "record_bytes_per_instance": 160,
+        "runs": [
+          {
+            "cpu": "Intel Core i7-12700H",
+            "method": {
+              "reps": 10,
+              "warmup_s": 2.0
+            },
+            "options": {
+              "seed": 1
+            },
+            "pinning": {
+              "process_affinity": "2"
+            },
+            "plan_fingerprint": "ab",
+            "profile": "release"
+          }
+        ]
+      },
+      "rust/lanterns/n1024/snapshot": {
+        "config": {
+          "env": "lanterns",
+          "flagship": "tessera/Lanterns-v1",
+          "kind": "rust",
+          "metric": "snapshot",
+          "name": "rust/lanterns/n1024/snapshot",
+          "num_envs": 1024
+        },
+        "fork_with_reobserve": {
+          "ci95": [
+            12.0,
+            13.0
+          ],
+          "median": 12.5,
+          "n": 10,
+          "samples": []
+        },
+        "metric": "snapshot",
+        "record_bytes": 160,
+        "runs": [
+          {
+            "cpu": "Intel Core i7-12700H",
+            "fork_with_reobserve": {
+              "ci95": [
+                12.0,
+                13.0
+              ],
+              "median": 12.5,
+              "n": 10,
+              "samples": []
+            },
+            "method": {
+              "reps": 10,
+              "warmup_s": 2.0
+            },
+            "options": {
+              "seed": 1
+            },
+            "pinning": {
+              "process_affinity": "2"
+            },
+            "plan_fingerprint": "ab",
+            "profile": "release"
+          }
+        ]
+      },
+      "rust/lanterns/sync4/n1024": {
+        "config": {
+          "env": "lanterns",
+          "flagship": "tessera/Lanterns-v1",
+          "kind": "rust",
+          "legal_actions": true,
+          "metric": "throughput",
+          "name": "rust/lanterns/sync4/n1024",
+          "num_envs": 1024,
+          "schedule": "static",
+          "workers": 4
+        },
+        "metric": "throughput",
+        "runs": [
+          {
+            "cpu": "Intel Core i7-12700H",
+            "method": {
+              "reps": 10,
+              "warmup_s": 2.0
+            },
+            "options": {
+              "seed": 1
+            },
+            "pinning": {
+              "process_affinity": "2"
+            },
+            "plan_fingerprint": "ab",
+            "profile": "release",
+            "samples": {
+              "ci95": [
+                3400.0,
+                3800.0
+              ],
+              "median": 3600.0,
+              "n": 10,
+              "samples": []
+            }
+          }
+        ],
+        "samples": {
+          "ci95": [
+            3400.0,
+            3800.0
+          ],
+          "median": 3600.0,
+          "n": 10,
+          "samples": []
+        },
+        "schedule": "static",
+        "workers": 4
+      }
+    },
+    "runs": 1,
+    "schema": "tessera-bench/3",
+    "valid_for_claims": false
+  },
+  "report_sha256": "5050dba08db08a3f842561dbd284f4d6fbc434b6d9b748dbfe94f748e71eaf1c",
+  "schema": "tessera-dashboard-result/1"
+}
