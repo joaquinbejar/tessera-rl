@@ -276,7 +276,9 @@ def relaxed_masks(row, mask_heads) -> tuple[np.ndarray, ...]:
 
 
 #: The groups whose actions the engine computes.
-_HEURISTIC_GROUPS = frozenset({"heuristic", "privileged_heuristic"})
+#: The groups the engine plays, hidden under ``visible="learner"``: the
+#: heuristic slots and the league's ``"opponent"`` slots.
+_HEURISTIC_GROUPS = frozenset({"heuristic", "privileged_heuristic", "opponent"})
 
 
 #: `agents=` left unset (the filter's old spelling defaults to every agent).
@@ -439,6 +441,11 @@ class _Agents:
             info.update(self.refusal(slot))
         if self.groups:
             info["policy_group"] = self.groups[slot]
+            if "opponent" in self.groups:
+                # The instance's league opponent (ADR-0088 section 10).
+                assignment = self.env.assignment
+                if assignment is not None:
+                    info["assignment"] = int(assignment[0])
         return info
 
     def team_metadata(self, names: list[str]) -> dict:
@@ -456,7 +463,7 @@ class _Agents:
         roles[name] = self.roles[slot] if slot < len(self.roles) else ""
 
     def hidden(self, slot: int) -> bool:
-        """Whether agent ``slot`` is hidden: a heuristic slot under
+        """Whether agent ``slot`` is hidden: a heuristic or opponent slot under
         ``visible="learner"``."""
         return self.learner_only and slot < len(self.groups) and self.groups[slot] in _HEURISTIC_GROUPS
 

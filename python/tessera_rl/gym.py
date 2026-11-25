@@ -160,6 +160,13 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
     native = maker(**native_kwargs(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs))
     layout = native.layout()
     groups = tuple(layout.get("policy_groups", ()))
+    if "opponent" in groups:
+        # A league pool's opponent rows may be External (the caller's), so
+        # it is multi-agent whatever its slot count.
+        native.close()
+        raise _native.CapabilityError(
+            f"{env_id} with a league is multi-agent; use the PettingZoo adapter (tessera_rl.pz) or tessera_rl.Env"
+        )
     if groups and groups[0] != "learner":
         # The adapter drives slot 0: a map must keep it a learner
         # (ADR-0079 item 5.2).

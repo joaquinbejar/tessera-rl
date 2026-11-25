@@ -25,6 +25,7 @@ mod continuous_probe;
 mod env;
 mod errors;
 mod ffi;
+mod league_api;
 #[cfg(feature = "test-hooks")]
 mod multi_probe;
 #[cfg(test)]

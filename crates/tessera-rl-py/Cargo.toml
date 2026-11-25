@@ -35,6 +35,8 @@ tessera-rl-num.workspace = true
 tessera-rl-engine = { workspace = true, features = ["replay"] }
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
+# Leagues (ADR-0088 section 10, #384 head E3): `tessera_rl.League`.
+tessera-rl-league.workspace = true
 tessera-rl-search.workspace = true
 tessera-rl-rts.workspace = true
 tessera-rl-markets.workspace = true

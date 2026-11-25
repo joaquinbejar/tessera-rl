@@ -349,9 +349,10 @@ pub(crate) trait PoolOps: Send {
     fn scene(&self, _id: u32) -> Result<(Vec<tessera_rl_core::render::Prim>, bool), BindError> {
         Err(crate::render_api::not_renderable())
     }
-    /// The epoch barrier of the pool's normalization (ADR-0078 item 5.3):
-    /// sync mode only.
-    fn epoch_barrier(&mut self) -> Result<(), BindError> {
+    /// The pool's epoch barrier (ADR-0081 item 1.3): its report, and
+    /// whether normalization is frozen (`None` without a `Normalize`). Sync
+    /// mode only.
+    fn epoch_barrier(&mut self) -> Result<Barrier, BindError> {
         Err(transforms_sync_only())
     }
     /// Freezes or unfreezes normalization (ADR-0078 item 5.6): sync mode
@@ -378,6 +379,11 @@ pub(crate) trait PoolOps: Send {
     /// heuristic slot. The split-phase handles read their wrapper's rows
     /// (#347 stage B1).
     fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
+        Ok(None)
+    }
+    /// Each instance's league opponent (ADR-0088 item 2.3, `[N]`
+    /// little-endian `u32`), copied; `None` without a league.
+    fn assignment(&self) -> Result<Option<Vec<u8>>, BindError> {
         Ok(None)
     }
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
@@ -979,10 +985,17 @@ where
         self.render.as_ref().map(|(_, fns)| fns.canvas)
     }
 
-    fn epoch_barrier(&mut self) -> Result<(), BindError> {
-        // The report reaches Python in #359 head D (ADR-0081 item 1.3).
-        self.pool.epoch_barrier()?;
-        Ok(())
+    fn epoch_barrier(&mut self) -> Result<Barrier, BindError> {
+        let report = self.pool.epoch_barrier()?;
+        let normalization = self
+            .pool
+            .transforms()
+            .has_normalize()
+            .then(|| self.pool.normalization_frozen());
+        Ok(Barrier {
+            report,
+            normalization,
+        })
     }
 
     fn freeze_normalization(&mut self, frozen: bool) -> Result<(), BindError> {
@@ -1030,6 +1043,13 @@ where
             .pool
             .heuristic_actions()
             .map(|rows| rows.iter().flat_map(|v| v.to_le_bytes()).collect()))
+    }
+
+    fn assignment(&self) -> Result<Option<Vec<u8>>, BindError> {
+        Ok(self
+            .pool
+            .assignment()
+            .map(|a| a.iter().flat_map(|v| v.to_le_bytes()).collect()))
     }
 
     fn illegal_actions(&self, id: u32) -> Result<Vec<u32>, BindError> {
@@ -1302,9 +1322,22 @@ pub(crate) struct PoolArgs {
     /// The policy map (ADR-0079), `None` for the default: every slot a
     /// learner.
     pub(crate) policy_map: Option<crate::policy::PolicySpec>,
+    /// The league of `"opponent"` slots and the pool's role (ADR-0088
+    /// section 10, #384 head E3).
+    pub(crate) league: Option<(tessera_rl_league::SharedLeague, usize)>,
     /// The privileged state buffer (ADR-0079 item 7): only for an
     /// environment that implements `PrivilegedState`, in Sync mode.
     pub(crate) privileged_state: bool,
+}
+
+/// What `epoch_barrier()` returns to Python (ADR-0081 item 1.3, #384
+/// head E3).
+#[derive(Debug, Clone)]
+pub(crate) struct Barrier {
+    /// The engine's report.
+    pub(crate) report: tessera_rl_engine::EpochReport,
+    /// Whether normalization is frozen; `None` without a `Normalize`.
+    pub(crate) normalization: Option<bool>,
 }
 
 /// The refusal of the normalization calls outside sync mode.
@@ -2220,6 +2253,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             pipelined: false,
             asynced: None,
             privileged_state: false,
@@ -2319,6 +2353,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             privileged_state: false,
             pipelined: false,
             asynced: None,
@@ -2340,6 +2375,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             privileged_state: false,
             pipelined,
             asynced: None,
@@ -2555,6 +2591,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             privileged_state: false,
             pipelined: false,
             asynced: None,
