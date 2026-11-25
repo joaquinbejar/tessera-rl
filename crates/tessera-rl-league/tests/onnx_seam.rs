@@ -14,7 +14,7 @@
 
 use core::num::{NonZeroU32, NonZeroUsize};
 
-use tessera_rl_classic::{PaddleDuel, PaddleDuelConfig};
+use tessera_rl_classic::{PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig};
 use tessera_rl_engine::league::{OpponentPolicies, OpponentPolicyError, sealed};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EngineError, EnvPool, NoMasks, PoolOptions, Reseed, SyncOptions,
@@ -386,4 +386,38 @@ fn test_onnx_pending_reset_instances_are_not_batched() {
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 10, "{calls:?}");
     assert!(calls.iter().all(|&(h, n)| h == HASH && n == N as usize));
+}
+
+/// ADR-0088 erratum 2: a pool with continuous action heads is refused at
+/// `with_onnx_opponents` with a typed error, before any reset.
+#[test]
+fn test_with_onnx_opponents_refuses_continuous_heads() {
+    let mut population = Population::new();
+    population
+        .add(
+            PolicyKind::Onnx { content_hash: HASH },
+            elo::INITIAL,
+            Rating::initial(),
+            0,
+        )
+        .unwrap();
+    let league = PoolLeague::new(
+        League::new(
+            LeagueConfig {
+                matchmaking: Matchmaking::Uniform,
+                ..LeagueConfig::default()
+            },
+            population,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let view = league.view().unwrap();
+    let options = PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(1));
+    let refused = EnvPool::<Pendulum, NoMasks>::new(PendulumConfig::default(), options)
+        .unwrap()
+        .with_league(&[0], view, Box::new(league))
+        .unwrap()
+        .with_onnx_opponents(Box::new(ByteRule { bad: None }));
+    assert!(matches!(refused, Err(EngineError::League { .. })));
 }
