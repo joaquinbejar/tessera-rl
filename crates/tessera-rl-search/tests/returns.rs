@@ -522,7 +522,9 @@ fn test_returns_puct_and_gumbel_goldens_are_pinned() {
     m.run(&mut eval).unwrap();
     let second = digest(&fingerprint(&m, cfg.actions).1);
     let mut g = GumbelConfig::default();
-    g.m = 3;
+    // Two of three root actions: the third is unvisited, so `pi'` uses
+    // `v_mix` in normalized units.
+    g.m = 2;
     let mut puct = returns(0.5, 48);
     puct.root = RootSelection::Gumbel(g);
     let mut gm = search(&cfg, puct);
@@ -539,11 +541,11 @@ fn test_returns_puct_and_gumbel_goldens_are_pinned() {
     let pinned = (
         9_811_372_669_519_447_865,
         14_723_742_536_957_817_435,
-        vec![8, 20, 20],
+        vec![0, 24, 24],
         vec![
-            4_581_516_401_972_690_821,
-            4_603_483_973_270_052_782,
-            4_600_702_312_192_568_491,
+            4_599_162_800_145_273_833,
+            4_598_890_451_588_625_239,
+            4_600_976_006_529_300_673,
         ],
     );
     assert_eq!(got, pinned);
