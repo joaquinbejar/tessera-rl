@@ -4,6 +4,7 @@ real Callgrind output meets the gate is unproven until a host window exists."""
 
 import importlib.util
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -298,3 +299,75 @@ def test_pgo_non_caller_threads_are_measured():
     assert not ev.worker_threads_collected([thread(100), thread(9, "/lib/libc.so")])
     with pytest.raises(ValueError, match="at least one other"):
         ev.non_caller_native([thread(100)])
+
+
+# musl (#582): a stripped ld-musl names its functions only by address; the
+# primitives are found through the dynamic symbol table of the measured libc.
+MUSL_SYMBOLS = {0x64C90: "memset", 0x64C39: "memcpy", 0x64C6B: "memmove", 0x64451: "bzero", 0x12340: "malloc", 0x64A10: "memcmp", 0x64B20: "bcmp"}
+
+
+def musl_text():
+    return (ROOT / "tests" / "python" / "fixtures" / "pgo" / "musl-stripped.callgrind").read_text()
+
+
+def test_primitive_calls_musl_by_address_resolves_through_symbols():
+    seen = []
+
+    def symbols(path):
+        seen.append(path)
+        return MUSL_SYMBOLS
+
+    calls = ev.primitive_calls(musl_text(), symbols)
+    assert calls == {"memset": 730, "memcpy": 60, "memcmp": 25, "bcmp": 15}
+    assert set(seen) == {"/lib/ld-musl-x86_64.so.1"}
+
+
+def test_primitive_calls_musl_unknown_address_is_not_charged():
+    assert ev.primitive_calls(musl_text(), lambda path: {}) == {}
+
+
+def test_native_cost_with_primitives_musl_charges_the_resolved_primitives():
+    assert ev.native_cost_with_primitives(musl_text(), lambda path: MUSL_SYMBOLS).primitives == 830
+
+
+def test_is_memory_primitive_musl_object_by_name_and_address():
+    musl = "/lib/ld-musl-aarch64.so.1"
+    assert ev.is_memory_primitive(musl, "memcpy", lambda path: {})
+    assert ev.is_memory_primitive(musl, "0x64c90", lambda path: MUSL_SYMBOLS)
+    assert not ev.is_memory_primitive(musl, "0x12340", lambda path: MUSL_SYMBOLS)
+    # An address in an object that is not libc is never looked up.
+    assert not ev.is_memory_primitive("/usr/lib/libfoo.so", "0x64c90", lambda path: MUSL_SYMBOLS)
+
+
+def test_dynamic_symbols_unreadable_table_refused():
+    ev.dynamic_symbols.cache_clear()
+    with pytest.raises(ValueError, match="cannot read the dynamic symbols"):
+        ev.dynamic_symbols("/nonexistent/ld-musl-x86_64.so.1")
+
+
+def test_dynamic_symbols_primitive_name_wins_an_alias(monkeypatch):
+    out = "0000000000064c90 T musl_fill_impl\n0000000000064c90 T memset\n0000000000064c39 T memcpy\n                 U abort\n"
+
+    def run(*a, **k):
+        return subprocess.CompletedProcess(a, 0, stdout=out, stderr="")
+
+    ev.dynamic_symbols.cache_clear()
+    monkeypatch.setattr(ev.subprocess, "run", run)
+    try:
+        table = ev.dynamic_symbols("/lib/ld-musl-x86_64.so.1")
+    finally:
+        ev.dynamic_symbols.cache_clear()
+    assert table == {0x64C90: "memset", 0x64C39: "memcpy"}
+
+
+def test_is_memory_primitive_compares_count_on_glibc_musl_and_macos():
+    # #583: build-caused memcmp and bcmp calls are charged like the fills.
+    glibc, musl, mac = "/usr/lib/x86_64-linux-gnu/libc.so.6", "/lib/ld-musl-x86_64.so.1", "/usr/lib/system/libsystem_platform.dylib"
+    for name in ("memcmp", "__memcmp_avx2_movbe", "__memcmp_evex_movbe", "__memcmpeq_avx2", "bcmp"):
+        assert ev.is_memory_primitive(glibc, name, lambda path: {}), name
+    assert ev.is_memory_primitive(musl, "memcmp", lambda path: {})
+    assert ev.is_memory_primitive(musl, "bcmp", lambda path: {})
+    assert ev.is_memory_primitive(mac, "_platform_memcmp", lambda path: {})
+    # Not memory primitives: string compares and searches.
+    for name in ("strcmp", "memchr", "memrchr", "wmemcmp"):
+        assert not ev.is_memory_primitive(glibc, name, lambda path: {}), name
