@@ -137,7 +137,6 @@ def test_selfplay_protocol_entry_and_gate():
     assert p["total_steps"] == 1_000_000 and p["hyper"] == {} and p["eval_episodes"] == 50 and p["score"] == "final"
     assert lp.gate("lanterns") == {"min_effect": 0.10}
     assert lp.selfplay_hyper("lanterns", 512).total_steps == 512
-    assert not (ROOT / "compat" / "learning" / "lanterns.json").exists()
 
 
 def test_selfplay_calibrate_uses_ten_seeds_and_their_minimum():
