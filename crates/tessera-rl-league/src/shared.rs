@@ -620,4 +620,87 @@ mod tests {
         inner.apply(0, other, Outcome::Win).unwrap();
         assert!(inner.roles[0].elo > elo::INITIAL);
     }
+
+    fn two_roles() -> SharedLeague {
+        let mut population = Population::new();
+        population
+            .add(PolicyKind::Heuristic, elo::INITIAL, Rating::initial(), 0)
+            .unwrap();
+        SharedLeague::new(
+            SharedConfig {
+                elo_k: 16.0,
+                trueskill: Params::default(),
+                rate_population: true,
+                roles: vec![RoleConfig::new(Matchmaking::Uniform); 2],
+            },
+            population,
+        )
+        .unwrap()
+    }
+
+    /// The commit merges slots in registration order: pool 0's win, then
+    /// pool 1's loss, against the shared entry, exactly as sequential Elo
+    /// updates in that order (the population entry's rating carries over).
+    #[test]
+    fn test_shared_commit_merges_in_registration_order() {
+        let league = two_roles();
+        let _a = league.member(0).unwrap();
+        let _b = league.member(1).unwrap();
+        let mut inner = league.lock().unwrap();
+        inner.slots[0] = Some(vec![(PolicyId(0), Outcome::Win)]);
+        inner.slots[1] = Some(vec![(PolicyId(0), Outcome::Loss)]);
+        inner.commit().unwrap();
+        let (l0, o0) = elo::update(elo::INITIAL, elo::INITIAL, Outcome::Win, 16.0);
+        let (l1, o1) = elo::update(elo::INITIAL, o0, Outcome::Loss, 16.0);
+        assert_eq!(inner.roles[0].elo.to_bits(), l0.to_bits());
+        assert_eq!(inner.roles[1].elo.to_bits(), l1.to_bits());
+        assert_eq!(inner.population.entries()[0].elo.to_bits(), o1.to_bits());
+        assert_eq!(inner.round, 1);
+    }
+
+    /// Frozen, a commit applies nothing and changes no view.
+    #[test]
+    fn test_shared_frozen_commit_changes_nothing() {
+        let league = two_roles();
+        let _a = league.member(0).unwrap();
+        league.set_frozen(true).unwrap();
+        let before = league.view(0).unwrap();
+        let mut inner = league.lock().unwrap();
+        inner.slots[0] = Some(vec![(PolicyId(0), Outcome::Win)]);
+        inner.commit().unwrap();
+        assert_eq!(inner.roles[0].elo.to_bits(), elo::INITIAL.to_bits());
+        assert_eq!(inner.roles[0].counts[0], PairCounts::default());
+        assert_eq!(inner.roles[0].view, before);
+        assert_eq!(inner.round, 1);
+    }
+
+    /// A role's self-play entry is drawn by that role only.
+    #[test]
+    fn test_shared_self_play_entry_serves_its_role_only() {
+        let mut population = Population::new();
+        population
+            .add(PolicyKind::Heuristic, elo::INITIAL, Rating::initial(), 0)
+            .unwrap();
+        let with_self = RoleConfig {
+            self_play: Some(SelfPlay {
+                share: 0.5,
+                tag: 77,
+            }),
+            ..RoleConfig::new(Matchmaking::Uniform)
+        };
+        let league = SharedLeague::new(
+            SharedConfig {
+                elo_k: 16.0,
+                trueskill: Params::default(),
+                rate_population: false,
+                roles: vec![with_self, RoleConfig::new(Matchmaking::Uniform)],
+            },
+            population,
+        )
+        .unwrap();
+        let other = league.view(1).unwrap();
+        // Entry 1 is role 0's self-play entry: zero width for role 1.
+        assert_eq!(other.thresholds()[1], other.thresholds()[0]);
+        assert_eq!(other.last(), 0);
+    }
 }
