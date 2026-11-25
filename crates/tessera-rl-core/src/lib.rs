@@ -57,8 +57,8 @@ pub use entity_heads::{EntityHeads, HeadSpec};
 )]
 pub use env::EnvAssets;
 pub use env::{
-    ActionMask, Determinize, EnvConfig, EnvState, Environment, Heuristic, ImperfectInformation,
-    InfoHeuristic, Persist, Render, Validate,
+    ActionMask, Adaptive, Determinize, EnvConfig, EnvState, Environment, Heuristic,
+    ImperfectInformation, InfoHeuristic, Persist, Render, Validate,
 };
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
 pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};

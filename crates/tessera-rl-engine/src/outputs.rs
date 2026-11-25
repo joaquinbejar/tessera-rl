@@ -429,6 +429,10 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) league_outcomes: &'a mut [i8],
     /// The league's opponent slots as a bit mask; 0 without a league.
     pub(crate) league_slots: u64,
+    /// The pool index of the view's first instance (0 for a pool-wide
+    /// view): pool-level per-slot data, such as curriculum targets
+    /// (ADR-0081 item 5.3), is indexed `base + i`.
+    pub(crate) base: usize,
 }
 
 impl OutputsView<'_> {
@@ -470,6 +474,7 @@ impl OutputsView<'_> {
             episode_aborts: &mut [],
             league_outcomes: &mut [],
             league_slots: 0,
+            base: 0,
         }
     }
 }
@@ -540,6 +545,7 @@ impl Outputs {
             episode_aborts: &mut [],
             league_outcomes: &mut [],
             league_slots: 0,
+            base: 0,
         }
     }
 }

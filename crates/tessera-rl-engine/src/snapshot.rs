@@ -39,14 +39,16 @@ use crate::record::{DecodedRecord, PoolContext, Record};
 use crate::transform::kernels::StackMode;
 use crate::validate::check_ids;
 
-/// A checked pool context, ready to write: the branch counter, the reset
-/// source, the transform context and the league entry.
-pub(crate) type CheckedContext<E> = (
-    u64,
-    Option<ArchiveSource<E>>,
-    crate::transform::TransformContext,
-    Option<Box<crate::league::LeagueContext>>,
-);
+/// A pool context checked against a pool, ready to write
+/// ([`EnvPool::apply_context`]).
+pub(crate) struct CheckedContext<E: Environment> {
+    branch_counter: u64,
+    source: Option<ArchiveSource<E>>,
+    transforms: crate::transform::TransformContext,
+    targets: Option<Vec<tessera_rl_core::Adaptive<E>>>,
+    curriculum: crate::adaptive::CurriculumContext,
+    league: Option<Box<crate::league::LeagueContext>>,
+}
 
 impl<E, M> EnvPool<E, M>
 where
@@ -308,6 +310,10 @@ where
                         .as_ref()
                         .map_or_else(Default::default, |t| t.context()),
                     league: pool.league.as_ref().map(|l| Box::new(l.context())),
+                    curriculum: match (pool.curriculum.as_ref(), pool.targets.as_deref()) {
+                        (Some(slot), Some(values)) => slot.context(values),
+                        _ => crate::adaptive::CurriculumContext::default(),
+                    },
                 },
                 policy_map: pool.policy.digest(),
             })
@@ -332,19 +338,12 @@ where
         archive: Option<&Archive<E>>,
     ) -> Result<(), EngineError> {
         self.guarded(Poison::Reject, |pool| {
-            let (branch_counter, source, transforms, league) =
-                pool.check_context(context, archive)?;
-            pool.branch_counter = branch_counter;
-            pool.reset_source = source;
-            if let Some(t) = pool.transform.as_mut() {
-                t.restore_context(&transforms);
-            }
-            if let (Some(state), Some(league)) = (pool.league.as_mut(), league.as_ref()) {
-                state.restore_context(league, &pool.headers);
+            let checked = pool.check_context(context, archive)?;
+            let league = checked.league.is_some();
+            pool.apply_context(checked);
+            if league {
                 pool.refresh_league();
             }
-            // Partials are not context: they restart empty (ADR-0081 item 6).
-            pool.episodes.clear();
             Ok(())
         })
     }
@@ -366,6 +365,7 @@ where
         let crate::adaptive::AdaptiveContext {
             normalization: transforms,
             league,
+            curriculum,
         } = adaptive;
         // ADR-0088 item 7.3: another population, or a league on one side
         // only, is refused before anything is written.
@@ -387,6 +387,12 @@ where
                 found: policy_map,
             });
         }
+        // ADR-0081 item 6: the curriculum's identity, state and targets.
+        let targets = crate::adaptive::check_curriculum(
+            self.curriculum.as_ref(),
+            self.headers.len(),
+            &curriculum,
+        )?;
         // ADR-0078 item 2.3: another transform identity is refused before
         // anything is written.
         match self.transform.as_ref() {
@@ -423,7 +429,45 @@ where
                 Some(ArchiveSource::new(given.clone(), Some(weights))?)
             }
         };
-        Ok((branch_counter, source, transforms, league))
+        Ok(CheckedContext {
+            branch_counter,
+            source,
+            transforms,
+            targets,
+            curriculum,
+            league,
+        })
+    }
+
+    /// Writes a context [`Self::check_context`] accepted. Partials are not
+    /// context: they restart empty (ADR-0081 item 6).
+    pub(crate) fn apply_context(&mut self, checked: CheckedContext<E>) {
+        let CheckedContext {
+            branch_counter,
+            source,
+            transforms,
+            targets,
+            curriculum,
+            league,
+        } = checked;
+        self.branch_counter = branch_counter;
+        self.reset_source = source;
+        if let Some(t) = self.transform.as_mut() {
+            t.restore_context(&transforms);
+        }
+        if let (Some(values), Some(slot)) = (targets, self.curriculum.as_mut()) {
+            self.targets = Some(crate::adaptive::Targets(values));
+            slot.frozen = curriculum.frozen;
+            if let Some(held) = slot.held.as_mut() {
+                held.restore_state(&curriculum.state);
+            }
+        }
+        // The exact continuation keeps every opponent (ADR-0088 item 3.2):
+        // the context's assignments, after the records.
+        if let (Some(state), Some(league)) = (self.league.as_mut(), league.as_ref()) {
+            state.restore_context(league, &self.headers);
+        }
+        self.episodes.clear();
     }
 
     /// Replay only: sets the branch counter of a keyframe, keeping the

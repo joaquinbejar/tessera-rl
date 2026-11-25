@@ -300,7 +300,9 @@ enum Taken<E: Environment> {
     },
     Pool {
         owner: Arc<OutputStorage>,
-        state: tessera_rl_engine::PoolState<E>,
+        /// Boxed: the whole-pool state (with its context) is far larger
+        /// than one record.
+        state: Box<tessera_rl_engine::PoolState<E>>,
     },
 }
 
@@ -314,7 +316,7 @@ impl<E: Environment> Taken<E> {
     /// The whole-pool state, or a refusal for a one-instance snapshot.
     fn pool(&self) -> Result<&tessera_rl_engine::PoolState<E>, BindError> {
         match self {
-            Self::Pool { state, .. } => Ok(state),
+            Self::Pool { state, .. } => Ok(&**state),
             Self::One { .. } => Err(BindError::Argument(
                 "a one-instance snapshot restores with restore, not as a pool".to_owned(),
             )),
@@ -710,7 +712,7 @@ where
         let state = pool.snapshot_pool()?;
         Ok(Arc::new(Taken::<E>::Pool {
             owner: Arc::clone(&self.storage),
-            state,
+            state: Box::new(state),
         }))
     }
 

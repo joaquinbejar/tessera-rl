@@ -22,7 +22,9 @@ where
     /// The epoch barrier (ADR-0081 item 1.3): runs every adaptive subsystem
     /// in order, episode statistics, then normalization (ADR-0078 item 5.3:
     /// the chunk accumulators merge into the pool statistics in chunk
-    /// order), and reports. A frozen subsystem changes nothing. Called by
+    /// order), then the curriculum (ADR-0081 item 5: it writes the targets
+    /// the next resets copy), and reports. A frozen subsystem changes
+    /// nothing. Called by
     /// the trainer at its own epoch boundary; never automatic.
     ///
     /// # Errors
@@ -38,6 +40,11 @@ where
             pool.episodes.barrier(&mut report)?;
             if let Some(t) = pool.transform.as_mut() {
                 t.barrier();
+            }
+            // Curriculum last (ADR-0081 item 1.2): it sees this epoch's
+            // statistics and writes targets for the next resets.
+            if let (Some(slot), Some(values)) = (pool.curriculum.as_mut(), pool.targets.as_mut()) {
+                report.curriculum = slot.barrier(&report, values);
             }
             // The league, the fourth subsystem (ADR-0088 section 7). The
             // commit order: episode statistics and normalization have
@@ -57,6 +64,7 @@ where
     pub fn freeze_adaptive(&mut self, frozen: bool) {
         self.freeze_episode_stats(frozen);
         self.freeze_normalization(frozen);
+        self.freeze_curriculum(frozen);
         self.freeze_league(frozen);
     }
 
@@ -82,5 +90,6 @@ where
         self.episodes.frozen()
             && !self.normalization_unfrozen()
             && self.league.as_ref().is_none_or(|l| l.frozen)
+            && self.curriculum.as_ref().is_none_or(|c| c.frozen)
     }
 }

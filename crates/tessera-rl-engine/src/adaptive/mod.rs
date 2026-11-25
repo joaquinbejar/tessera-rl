@@ -6,9 +6,13 @@
 //! order at the barrier, on the calling thread.
 
 mod barrier;
+mod curriculum;
 mod episodes;
 mod report;
+mod targets_api;
 
+pub use curriculum::{AdaptiveTargets, Curriculum, CurriculumChanges, CurriculumContext};
+pub(crate) use curriculum::{CurriculumSlot, Targets, check_curriculum};
 pub(crate) use episodes::{EpisodePartial, EpisodeStatistics};
 pub use report::{AdaptiveContext, EpisodeStats, EpochReport};
 

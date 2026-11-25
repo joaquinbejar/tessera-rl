@@ -309,6 +309,20 @@ pub enum EngineError {
     /// all frozen (ADR-0081 item 2.1, ADR-0026).
     #[error("the epoch barrier needs every adaptive subsystem frozen in Async mode")]
     AdaptiveInAsync,
+    /// A curriculum or targets on an environment whose adaptive values are
+    /// not read (ADR-0091 decision 3): it would change nothing.
+    #[error("no curriculum for this environment: {reason}")]
+    AdaptiveNotRead {
+        /// Why.
+        reason: &'static str,
+    },
+    /// An adaptive context that does not fit the pool (ADR-0081 item 6);
+    /// nothing is changed.
+    #[error("adaptive context refused: {reason}")]
+    AdaptiveContext {
+        /// Why.
+        reason: &'static str,
+    },
     /// A reduction counter of the epoch barrier would overflow `u64`.
     #[error("epoch barrier: {counter} overflows")]
     StatisticsOverflow {

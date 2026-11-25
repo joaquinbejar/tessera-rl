@@ -95,7 +95,10 @@ pub mod __private {
     pub use inventory;
     pub use tessera_rl_core::HostEnvironment;
 }
-pub use adaptive::{AdaptiveContext, EpisodeStats, EpochReport};
+pub use adaptive::{
+    AdaptiveContext, AdaptiveTargets, Curriculum, CurriculumChanges, CurriculumContext,
+    EpisodeStats, EpochReport,
+};
 pub use archive::{Archive, MAX_ARCHIVE_ENTRIES, ResetSource, ResetSourceContext};
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};

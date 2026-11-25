@@ -121,8 +121,9 @@ pub trait RecordLayout: Canonical + StateInit + Copy + 'static {
     /// Number of agent slots; must equal `Environment::MAX_AGENTS`.
     const AGENTS: usize;
 
-    /// The adaptive config values stored in the header.
-    type Adaptive: Canonical + StateInit + Copy + 'static;
+    /// The adaptive config values stored in the header: plain data, also
+    /// held by the pool as curriculum targets (ADR-0081 item 5.3).
+    type Adaptive: Canonical + StateInit + Copy + Send + Sync + 'static;
 
     /// The adaptive values, mutably.
     fn adaptive_mut(&mut self) -> &mut Self::Adaptive;
@@ -151,7 +152,7 @@ impl<const A: usize, Ad> RecordHeader<A, Ad> {
     );
 }
 
-impl<const A: usize, Ad: Canonical + StateInit + Copy + 'static> RecordLayout
+impl<const A: usize, Ad: Canonical + StateInit + Copy + Send + Sync + 'static> RecordLayout
     for RecordHeader<A, Ad>
 {
     const AGENTS: usize = {
