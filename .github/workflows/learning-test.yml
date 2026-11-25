@@ -60,6 +60,9 @@ jobs:
             artifact: learning-test-jobshop
           - env: vrp
             artifact: learning-test-vrp
+          # T3c (#529): Lanterns, one shared policy on every seat.
+          - env: lanterns
+            artifact: learning-test-lanterns
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find the previous scheduled run

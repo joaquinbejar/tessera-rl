@@ -226,6 +226,53 @@ def learns_twoplayer(
     }
 
 
+def learns_selfplay(
+    trained: list[float],
+    uniform: list[float],
+    heuristic: list[float],
+    resamples: int = 10_000,
+    seed: int = 0,
+    min_effect: float = MIN_EFFECT,
+) -> dict:
+    """The tier T3c check (#529, DESIGN-r1 section 2, REVIEW-design-r1).
+
+    ``trained`` are the trained seeds' scores (one mean final score per
+    seed); ``uniform`` (U) and ``heuristic`` (H) are the per-episode scores
+    of uniform-legal play and of heuristic slots on every seat, on the same
+    evaluation seeds. One threshold: the game is cooperative, so there is no
+    opponent to beat.
+
+    - **No gate** when the lower bound of the bootstrap 95% interval of
+      ``mean(H) - mean(U)`` is at most 0.
+    - **Threshold:** the lower bound of ``mean(trained) - mean(U)`` is at
+      least ``min_effect * (mean(H) - mean(U))``.
+    - Learns only when it holds and the scores are not degenerate (constant
+      ``trained`` scores, or a zero-width interval)."""
+    arrays = [np.asarray(x, dtype=np.float64) for x in (trained, uniform, heuristic)]
+    if any(a.size < 2 or not np.all(np.isfinite(a)) for a in arrays):
+        return {"learns": False, "gate": True, "error": "learns_selfplay needs at least two finite scores in each list"}
+    t, u, hh = arrays
+    rng = np.random.default_rng(seed)
+    hu = np.mean(rng.choice(hh, size=(resamples, hh.size)), axis=1) - np.mean(rng.choice(u, size=(resamples, u.size)), axis=1)
+    hu_lo = float(np.percentile(hu, 2.5))
+    if hu_lo <= 0:
+        return {"learns": False, "gate": False, "reason": "lower95(H - U) <= 0: no gate", "hu_lower95": hu_lo}
+    gap = np.mean(rng.choice(t, size=(resamples, t.size)), axis=1) - np.mean(rng.choice(u, size=(resamples, u.size)), axis=1)
+    lo, hi = np.percentile(gap, [2.5, 97.5])
+    required = float(min_effect * (np.mean(hh) - np.mean(u)))
+    degenerate = bool(np.ptp(t) == 0 or hi == lo)
+    threshold = bool(lo >= required)
+    return {
+        "learns": bool(threshold and not degenerate),
+        "gate": True,
+        "degenerate": degenerate,
+        "threshold": threshold,
+        "ci95_trained_minus_u": [float(lo), float(hi)],
+        "required": required,
+        "hu_lower95": hu_lo,
+    }
+
+
 def no_verdict_streak(previous: dict | None) -> int:
     """Consecutive nights without a verdict, counting tonight, from the
     previous night's result. A night on an uncalibrated host gives no

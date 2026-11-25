@@ -1,0 +1,203 @@
+{
+  "seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110
+  ],
+  "threshold_rule": "min",
+  "threshold": 4.28,
+  "median": 4.74,
+  "min": 4.28,
+  "max": 5.1,
+  "setup": {
+    "env": "tessera/Lanterns-v1",
+    "total_steps": 1000000,
+    "eval_episodes": 50,
+    "fingerprint": "b2b90b7cddfd851d8c62e633b582ecefaf346c0a7ed585ef5334aeb36671bff0"
+  },
+  "environment": {
+    "git": "27bf38db15c2f6da0b1b2ab4c4b136df4a2d7163",
+    "git_dirty": false,
+    "python": "3.11.18",
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "image": "self-hosted Linux x86-64 runner, uv-managed CPython 3.11.18 (no container)",
+    "tessera_rl": "0.3.0",
+    "torch_threads": 1,
+    "omp_num_threads": "1",
+    "gymnasium": "1.4.0",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.4.6"
+  },
+  "records": [
+    {
+      "seed": 101,
+      "score": 4.88
+    },
+    {
+      "seed": 102,
+      "score": 4.74
+    },
+    {
+      "seed": 103,
+      "score": 5.1
+    },
+    {
+      "seed": 104,
+      "score": 4.82
+    },
+    {
+      "seed": 105,
+      "score": 4.36
+    },
+    {
+      "seed": 106,
+      "score": 4.38
+    },
+    {
+      "seed": 107,
+      "score": 4.92
+    },
+    {
+      "seed": 108,
+      "score": 4.62
+    },
+    {
+      "seed": 109,
+      "score": 4.74
+    },
+    {
+      "seed": 110,
+      "score": 4.28
+    }
+  ],
+  "gate": {
+    "min_effect": 0.1
+  },
+  "references": {
+    "uniform": [
+      1.0,
+      3.0,
+      0.0,
+      3.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      3.0,
+      1.0,
+      2.0,
+      1.0,
+      3.0,
+      0.0,
+      5.0,
+      2.0,
+      1.0,
+      1.0,
+      3.0,
+      0.0,
+      2.0,
+      4.0,
+      1.0,
+      0.0,
+      1.0,
+      1.0,
+      0.0,
+      3.0,
+      2.0,
+      6.0,
+      3.0,
+      2.0,
+      1.0,
+      0.0,
+      2.0,
+      0.0,
+      3.0,
+      2.0,
+      1.0,
+      2.0,
+      4.0,
+      2.0,
+      2.0,
+      0.0,
+      2.0,
+      0.0,
+      2.0,
+      1.0,
+      3.0,
+      0.0
+    ],
+    "heuristic": [
+      14.0,
+      16.0,
+      17.0,
+      16.0,
+      3.0,
+      4.0,
+      1.0,
+      4.0,
+      6.0,
+      6.0,
+      7.0,
+      14.0,
+      3.0,
+      6.0,
+      16.0,
+      10.0,
+      2.0,
+      9.0,
+      14.0,
+      17.0,
+      13.0,
+      16.0,
+      2.0,
+      15.0,
+      11.0,
+      1.0,
+      2.0,
+      14.0,
+      17.0,
+      8.0,
+      14.0,
+      5.0,
+      17.0,
+      3.0,
+      2.0,
+      4.0,
+      3.0,
+      7.0,
+      6.0,
+      17.0,
+      16.0,
+      20.0,
+      6.0,
+      20.0,
+      4.0,
+      1.0,
+      3.0,
+      6.0,
+      16.0,
+      14.0
+    ]
+  },
+  "learns": {
+    "learns": true,
+    "gate": true,
+    "degenerate": false,
+    "threshold": true,
+    "ci95_trained_minus_u": [
+      2.60595,
+      3.436
+    ],
+    "required": 0.77,
+    "hu_lower95": 6.0
+  }
+}
