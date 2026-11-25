@@ -2,7 +2,7 @@
 
 [package]
 name = "tessera-rl-classic"
-description = "Classic Tessera environments: CartPole and Tag"
+description = "Classic Tessera environments: classic control (CartPole, Acrobot, MountainCar, Pendulum), grid worlds, Snake, PaddleDuel, BrickWall, Gather and Tag"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

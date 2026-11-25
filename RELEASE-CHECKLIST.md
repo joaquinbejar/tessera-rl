@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 
-# Release checklist: v0.1.0
+# Release checklist
 
 The maintainer runs these steps in order. A step that fails stops the
 release. The tag, the published packages and the release all identify one
@@ -18,7 +18,7 @@ reviewed tree: the frozen SHA.
       scripts/changelog_draft.py <last tag>` prints a draft to start from
       (SPEC 20.1, #350).
 - [ ] The CHANGELOG heading carries the actual release date
-      (`## [0.1.0] - 2026-11-04`). If the release slips, the last PR before
+      (`## [<version>] - <YYYY-MM-DD>`). If the release slips, the last PR before
       the freeze corrects it. Nothing changes the tree after the freeze.
 - [ ] Record the frozen `main` SHA. Nothing merges after it until the tag.
 - [ ] `make pre-push` is green on a clean checkout of that SHA.
@@ -54,20 +54,21 @@ reviewed tree: the frozen SHA.
 
 ## 3. Packages
 
-The eight crates depend on each other at 0.1.0, which is not on crates.io
-yet, so a single crate cannot be packaged or dry-run on its own before the
+The publishable crates (every member of `crates/` except `tessera-rl-py`,
+which has `publish = false`; 18 crates) depend on each other at the release
+version, which is not on crates.io yet, so a single crate cannot be packaged or dry-run on its own before the
 ones it depends on are published (`cargo package -p tessera-rl-core` alone
-fails: `tessera-rl-num ^0.1.0` is not on the registry). They are packaged,
+fails: `tessera-rl-num ^<version>` is not on the registry). They are packaged,
 verified and published together, in one cargo invocation: cargo orders them
-by dependency (`tessera-rl-num`, `tessera-rl-core`, `tessera-rl-macros`,
-`tessera-rl-engine`, `tessera-rl-classic`, `tessera-rl-games`,
-`tessera-rl-search`, `tessera-rl`), verifies each against the others
+by dependency (for example `tessera-rl-num` before `tessera-rl-core`,
+`tessera-rl-core` before `tessera-rl-engine`, and the facade `tessera-rl`
+after every crate it re-exports), verifies each against the others
 through a local overlay registry, and on a real publish waits for each to
 appear in the index before the next.
 
 Always from a fresh clone of the frozen SHA, with a fresh target directory
 and a **writable Cargo home** (`$CARGO_HOME`, by default `~/.cargo`).
-Verification unpacks the eight overlay packages into the Cargo home's
+Verification unpacks the overlay packages into the Cargo home's
 registry. When the Cargo home cannot be written (a sandbox, or read-only
 permissions), cargo 1.99.1 fails while verifying `tessera-rl-core` with the
 misleading internal error "no hash listed for tessera-rl-num v0.1.0". This
@@ -80,9 +81,12 @@ export CARGO_TARGET_DIR="$PWD/../release-target"
 test -w "${CARGO_HOME:-$HOME/.cargo}"   # must succeed
 cargo package --locked \
   -p tessera-rl-num -p tessera-rl-macros -p tessera-rl-core \
-  -p tessera-rl-engine -p tessera-rl-classic -p tessera-rl-games \
-  -p tessera-rl-search -p tessera-rl
-cargo publish --dry-run --locked <the same eight -p flags>
+  -p tessera-rl-simd -p tessera-rl-engine -p tessera-rl-classic \
+  -p tessera-rl-games -p tessera-rl-markets -p tessera-rl-ops \
+  -p tessera-rl-rts -p tessera-rl-world -p tessera-rl-render \
+  -p tessera-rl-search -p tessera-rl-league -p tessera-rl-pyffi \
+  -p tessera-rl-onnx -p tessera-rl -p cargo-tessera
+cargo publish --dry-run --locked <the same 18 -p flags>
 ```
 
 - [ ] Manifest metadata meets the crates.io server-side limits, which
@@ -93,16 +97,17 @@ cargo publish --dry-run --locked <the same eight -p flags>
       `description` and `license` present in every crate; each `.crate`
       file under 10 MB. (The first real publish of 0.1.0 was refused for a
       22-character keyword.)
-- [ ] `cargo package` packages all eight and prints `Verifying` for each,
+- [ ] `cargo package` packages all 18 and prints `Verifying` for each,
       with no error (not `--no-verify`).
 - [ ] `cargo publish --dry-run` ends with "aborting upload due to dry run"
-      for each of the eight.
+      for each of the 18.
 - [ ] Package contents (`tar -tzf
-      $CARGO_TARGET_DIR/package/<crate>-0.1.0.crate`): the crate's `src/`,
+      $CARGO_TARGET_DIR/package/<crate>-<version>.crate`): the crate's `src/`,
       `tests/`, `benches/`, `README.md`, the normalized `Cargo.toml`,
       `Cargo.toml.orig`, `Cargo.lock` and `.cargo_vcs_info.json`, plus the
       expected assets: the golden and reference data under `tests/` of
-      `tessera-rl-classic` and `tessera-rl-games`, the trybuild cases under
+      `tessera-rl-classic` and `tessera-rl-games`, the Grid layouts under
+      `src/grid/layouts/` of `tessera-rl-classic`, the trybuild cases under
       `tests/ui/` of `tessera-rl-macros`, and the vendored math source and
       its licence in `tessera-rl-num`. Nothing from `examples/`,
       `results/`, `tools/`, `docs/`, `compat/` or `.github/`.
@@ -112,15 +117,15 @@ cargo publish --dry-run --locked <the same eight -p flags>
 - [ ] The facade's package `README.md` is byte-identical to the repository
       README.
 - [ ] The same `cargo publish` command without `--dry-run` publishes the
-      eight crates. The six crates already on crates.io at 0.0.1 are owned
-      by the maintainer; `tessera-rl-games` and `tessera-rl-search` are new
-      names.
-- [ ] After publishing: a throwaway crate with `tessera-rl = "0.1.0"`
+      18 crates. Every crate already on crates.io is owned by the
+      maintainer; a crate published for the first time is a new name, free
+      on crates.io before the publish.
+- [ ] After publishing: a throwaway crate with `tessera-rl = "<version>"`
       resolves from crates.io and builds the downstream toy environment.
 
 ## 4. Tag and release
 
-- [ ] Create the annotated tag `v0.1.0` on the frozen SHA and push it.
+- [ ] Create the annotated tag `v<version>` on the frozen SHA and push it.
 - [ ] Create the GitHub release from the CHANGELOG section.
 - [ ] docs.rs builds every crate.
 - [ ] Upload no file named `SHA256SUMS-assets` or `*.cyclonedx.json` to the
