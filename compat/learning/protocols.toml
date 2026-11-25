@@ -87,10 +87,12 @@ hyper = {}
 # 40 calibration seeds), while the sampling policy improves on random (5.2 vs
 # 4.55, seed 101's training curve). Not a pipeline fault: a scripted greedy
 # collector gets all 8 items through the same gym and flattening paths (#593).
-# A T1 variant with sampled evaluation is #595.
+# Tier T1s (#595): T1's training unchanged, with a sampled evaluation
+# (learning_sampled). The budget stays T1's 150k, pre-declared, with one
+# pilot and no tuning loop; no calibration yet, so no nightly gate.
 [gather]
 env = "tessera/Gather-v1"
-tier = "T1"
+tier = "T1s"
 adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}

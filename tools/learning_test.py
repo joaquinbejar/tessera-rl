@@ -197,7 +197,9 @@ def _train(args, seeds: list[int]) -> list[dict]:
             import learning_protocols
 
             tier = learning_protocols.protocol(PROTOCOL)["tier"]
-            if tier == "T1n":
+            if tier == "T1s":
+                r = learning_protocols.train_sampled(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+            elif tier == "T1n":
                 r = learning_protocols.train_normalized(PROTOCOL, seed, args.total_steps, args.eval_episodes)
                 # rev (#530): the parameters and the frozen observation
                 # statistics beside the score file, for an exact re-evaluation.
