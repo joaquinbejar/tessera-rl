@@ -10,6 +10,8 @@ from tessera_rl._env import Env
 __all__ = ["FORMAT_VERSION", "LogitsLog", "load", "logits_log", "payload", "side_path", "width_of"]
 
 FORMAT_VERSION: int
+MAX_LOGITS_BYTES: int
+MAX_SMALL_ENTRY_BYTES: int
 
 def side_path(replay_path: str | os.PathLike[str]) -> str: ...
 def width_of(env: Env) -> int: ...
