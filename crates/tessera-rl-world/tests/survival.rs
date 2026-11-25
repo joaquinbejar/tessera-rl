@@ -457,9 +457,8 @@ fn test_survival_slot_permutation_without_respawn_is_a_relabelling() {
 
 #[test]
 fn test_survival_slot_permutation_with_respawn_holds_until_the_first_respawn() {
-    // With respawn on, only T5 (respawn placement in slot order, and the
-    // slot mixed into the draw) may differ: the runs agree until an agent
-    // respawns.
+    // With respawn on, only T5 (respawn draws and placement in slot order)
+    // may differ: the runs agree until an agent respawns.
     let c = SurvivalConfig {
         steps: 4096,
         ..cfg(64, 32, 1)

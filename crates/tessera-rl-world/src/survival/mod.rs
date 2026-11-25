@@ -31,11 +31,10 @@
 //!      down.
 //!   4. **Deaths and respawn:** an agent at 0 health dies. With
 //!      `respawn > 0`, a dead agent respawns after `respawn` steps on a free
-//!      grass tile, as a new agent (a new slot generation). Its tile comes
-//!      from one key drawn from `StepRng` per step, mixed with the agent
-//!      slot (not the storage slot). Respawning agents are placed in slot
-//!      order, so when two draw the same tile the lower slot keeps it and
-//!      the other draws again (T5, the one slot-ordered rule).
+//!      grass tile, as a new agent (a new slot generation). Respawning
+//!      agents draw their candidate tiles from `StepRng` and are placed in
+//!      slot order, so a lower slot draws and places first and a later one
+//!      never takes its tile (T5, the one slot-ordered rule).
 //! - **Rewards:** +1 for every agent alive at the end of the step. Kills
 //!   give no reward (review Q2); they are counted in the state.
 //! - **End:** truncated at `steps` steps; terminated when no agent is alive
@@ -234,16 +233,16 @@ pub struct SurvivalObs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Survival;
 
-/// A 64-bit mix (the `SplitMix64` finalizer): the respawn draws of one agent
-/// slot from the step's key. Integer only. The multiplications wrap by
-/// design: this is a hash, and its output is the full 64-bit product
-/// modulo 2^64.
+/// The cells of a `size` x `size` map, `size` clipped to `MAX_SIZE`.
 #[must_use]
-pub const fn mix(mut z: u64) -> u64 {
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
+pub const fn cells(size: usize) -> u32 {
+    let clipped = if size < MAX_SIZE { size } else { MAX_SIZE };
+    #[expect(clippy::cast_possible_truncation, reason = "at most MAX_SIZE = 96")]
+    let per_side = clipped as u32;
+    per_side * per_side
 }
+// Per-mille shares of the largest map stay within u32: 9,216 x 1,000.
+const _: () = assert!((MAX_SIZE * MAX_SIZE * 1000) < u32::MAX as usize);
 
 fn slot(index: usize) -> Option<AgentSlot> {
     AgentSlot::new(u16::try_from(index).ok()?, MAX_AGENTS)
@@ -435,8 +434,7 @@ impl Environment for Survival {
         // Starting tiles: per slot, in slot order, each from its own draws;
         // a later slot sees the earlier ones (T5).
         let view = i16::try_from(cfg.view).unwrap_or(2);
-        let cells =
-            NonZeroU32::new(u32::try_from(size * size).unwrap_or(1)).unwrap_or(NonZeroU32::MIN);
+        let cells = NonZeroU32::new(cells(size)).unwrap_or(NonZeroU32::MIN);
         for a in 0..agents {
             let mut draws = [0u64; RESPAWN_TRIES];
             for d in &mut draws {
@@ -586,7 +584,6 @@ impl Environment for Survival {
             }
         }
         let respawn = u16::try_from(cfg.respawn).unwrap_or(0);
-        let key = rng.next_u64();
         let view = i16::try_from(cfg.view).unwrap_or(2);
         for a in 0..n {
             if state.is_alive(a) {
@@ -604,8 +601,19 @@ impl Environment for Survival {
             }
             let dead_for = state.dead_for.get(a).copied().unwrap_or(0);
             if respawn > 0 && dead_for >= respawn {
-                let salt = key ^ (u64::try_from(a).unwrap_or(0) << 32);
-                if let Some((x, y)) = state.spawn_tile(view, |k| mix(salt ^ k)) {
+                // StepRng only (ADR-0007): this agent's candidates, drawn in
+                // slot order; T5 orders the placement as well.
+                let cells = NonZeroU32::new(cells(state.side())).unwrap_or(NonZeroU32::MIN);
+                let mut draws = [0u64; RESPAWN_TRIES];
+                for d in &mut draws {
+                    *d = u64::from(rng.below_u32(cells));
+                }
+                if let Some((x, y)) = state.spawn_tile(view, |k| {
+                    draws
+                        .get(usize::try_from(k).unwrap_or(0))
+                        .copied()
+                        .unwrap_or(0)
+                }) {
                     state.spawn(a, x, y);
                     if let Some(s) = slot(a) {
                         out.agent_spawned(s);

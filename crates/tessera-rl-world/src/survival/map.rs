@@ -70,8 +70,10 @@ pub fn generate(
             }
         }
     }
-    let total = u32::try_from(size * size).unwrap_or(u32::MAX);
-    let share = |p: u32| total.saturating_mul(p) / 1000;
+    let total = super::cells(size);
+    // At most 9,216 cells times 1,000 per mille: no overflow (asserted in
+    // `super::cells`).
+    let share = |p: u32| total * p / 1000;
     // Water: the lowest values up to the water share.
     let water_top = threshold_low(&counts, share(shares.water));
     // Stone, then forest: the highest values.
@@ -160,8 +162,10 @@ fn connect(tiles: &mut [[u8; MAX_SIZE]; MAX_SIZE], size: usize) {
     let c = size / 2;
     let mut start = None;
     'rings: for r in 0..size {
-        for y in c.saturating_sub(r)..=(c + r).min(size - 1) {
-            for x in c.saturating_sub(r)..=(c + r).min(size - 1) {
+        // The ring of radius r around c, clipped to the map.
+        let (low, high) = (c - r.min(c), (c + r).min(size - 1));
+        for y in low..=high {
+            for x in low..=high {
                 if passable(tile(tiles, x, y)) {
                     start = Some((x, y));
                     break 'rings;
