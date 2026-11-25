@@ -332,7 +332,9 @@ fn test_league_replay_seek_restores_the_view_and_assignments() {
         .keyframes()
         .unwrap()
         .iter()
-        .rfind(|&&k| leagues.iter().any(|&l| l > 0 && l < k))
+        // A keyframe whose view is not the initial one: `Rotating` repeats
+        // every three barriers.
+        .rfind(|&&k| (leagues.iter().filter(|&&l| l < k).count() - 1) % 3 != 0)
         .unwrap();
     let mut replayed = pool();
     let mut cur = replay.cursor(&replayed).unwrap();
