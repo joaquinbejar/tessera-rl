@@ -139,8 +139,8 @@ def make(
     num_envs: int = 1,
     seed: int = 0,
     outputs: str = "borrowed",
-    device: str | None = None,
     *,
+    device: str | None = None,
     onnx_opponents: OnnxOpponents | None = None,
     **kwargs: Any,
 ) -> Env: ...
