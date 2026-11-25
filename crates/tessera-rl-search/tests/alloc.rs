@@ -15,6 +15,8 @@
 
 #[path = "support/counting.rs"]
 mod counting;
+#[path = "support/picker.rs"]
+mod picker;
 
 use core::num::NonZeroU32;
 use counting::window;
@@ -211,8 +213,62 @@ fn test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual
     }
 }
 
+/// Uniform priors over Picker's 24 joints and a value of 0.5.
+struct PickerUniform;
+
+impl tessera_rl_search::Evaluator<picker::Picker> for PickerUniform {
+    fn evaluate(
+        &mut self,
+        _: &[tessera_rl_engine::Record<picker::Picker>],
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), tessera_rl_search::EvaluatorError> {
+        priors.fill(1.0 / f64::from(picker::NVEC.iter().product::<u32>()));
+        values.fill(0.5);
+        Ok(())
+    }
+}
+
+/// `ValueMode::Returns` (ADR-0096) under PUCT and the Gumbel root, on a
+/// one-agent environment: the discounted backup and the min-max are
+/// scalars, so a call allocates nothing.
+fn test_search_mcts_returns_mode_does_not_allocate() {
+    let cfg = picker::PickerConfig::default();
+    let mut p = EnvPool::<picker::Picker, Masked>::with_masks(
+        cfg.clone(),
+        PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+    )
+    .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let root = p.snapshot(0).unwrap();
+    for gumbel in [false, true] {
+        let o = SearchOptions::new(NonZeroU32::new(256).unwrap(), NonZeroU32::new(8).unwrap());
+        let pool = SearchPool::new(cfg.clone(), o, &root, EnvPool::with_masks).unwrap();
+        let mut puct = tessera_rl_search::PuctConfig::default();
+        puct.simulations = 64;
+        puct.value = tessera_rl_search::ValueMode::Returns { discount: 0.5 };
+        if gumbel {
+            puct.root = tessera_rl_search::RootSelection::Gumbel(
+                tessera_rl_search::GumbelConfig::default(),
+            );
+        }
+        let mut m = tessera_rl_search::Mcts::new(pool, puct).unwrap();
+        let n = allocations(|| {
+            for _ in 0..3 {
+                m.run(&mut PickerUniform).unwrap();
+                std::hint::black_box(m.select_action(0.0).unwrap());
+                m.pool_mut().set_root(&root).unwrap();
+            }
+        });
+        assert_eq!(
+            n, 0,
+            "a Returns search call (gumbel {gumbel}) allocated {n} times"
+        );
+    }
+}
+
 /// The scenarios this binary runs.
-const SCENARIOS: usize = 5;
+const SCENARIOS: usize = 6;
 
 #[test]
 fn test_search_alloc_scenarios_do_not_allocate() {
@@ -234,6 +290,10 @@ fn test_search_alloc_scenarios_do_not_allocate() {
             (
                 "test_search_mcts_gumbel_run_with_reroot_does_not_allocate",
                 test_search_mcts_gumbel_run_with_reroot_does_not_allocate,
+            ),
+            (
+                "test_search_mcts_returns_mode_does_not_allocate",
+                test_search_mcts_returns_mode_does_not_allocate,
             ),
             (
                 "test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual_loss",

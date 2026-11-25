@@ -131,5 +131,5 @@ impl FunctionKw for MakeSearchGroup {
 /// The module-level constructor, for the module's function table.
 pub(super) const MAKER: FunctionRow = FunctionRow::kw::<MakeSearchGroup>(
     c"make_search_group",
-    c"make_search_group($module, *, trees, slot_options=None, env_id=None, capacity=None, batch=None, eviction=None, c_puct=None, fpu=None, virtual_loss=None, batch_size=None, simulations=None, noise_alpha=None, noise_epsilon=None, seed=None, root=None, gumbel_m=None, c_visit=None, c_scale=None)\n--\n\nmake_search_group(trees, slot_options=None, **search_options) -> SearchGroup",
+    c"make_search_group($module, *, trees, slot_options=None, env_id=None, capacity=None, batch=None, eviction=None, c_puct=None, fpu=None, virtual_loss=None, batch_size=None, simulations=None, noise_alpha=None, noise_epsilon=None, seed=None, root=None, gumbel_m=None, c_visit=None, c_scale=None, value=None, discount=None)\n--\n\nmake_search_group(trees, slot_options=None, **search_options) -> SearchGroup",
 );

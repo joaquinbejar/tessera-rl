@@ -15,12 +15,12 @@ use crate::errors::{Kind, error, to_py};
 use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::search::{BatchEval, RawBatch, SearchArgs, SearchOps};
-use tessera_rl_search::{EvaluatorError, Eviction};
+use tessera_rl_search::{EvaluatorError, Eviction, ValueMode};
 
 /// The state behind a `Search` object.
 pub(crate) type SearchInner = Inner<dyn SearchOps>;
 
-pub(crate) const SEARCH_KEYS: [&str; 16] = [
+pub(crate) const SEARCH_KEYS: [&str; 18] = [
     "env_id",
     "capacity",
     "batch",
@@ -37,7 +37,40 @@ pub(crate) const SEARCH_KEYS: [&str; 16] = [
     "gumbel_m",
     "c_visit",
     "c_scale",
+    "value",
+    "discount",
 ];
+
+/// Applies `value` and `discount` (ADR-0096): `value="terminal"` (the
+/// default) or `"returns"`, whose `discount` defaults to 1. A discount
+/// without `"returns"` is refused, never ignored; its range is checked by
+/// the search (`SearchError`).
+fn apply_value(g: Gil, kw: &Kwargs<'_>, args: &mut SearchArgs) -> CResult<()> {
+    let discount = kw.f64(g, "discount")?;
+    match (kw.string(g, "value")?.as_deref(), discount) {
+        (None | Some("terminal"), None) => args.puct.value = ValueMode::Terminal,
+        (Some("returns"), d) => {
+            args.puct.value = ValueMode::Returns {
+                discount: d.unwrap_or(1.0),
+            };
+        }
+        (None | Some("terminal"), Some(_)) => {
+            return Err(error(
+                g,
+                Kind::Argument,
+                "discount needs value=\"returns\"".to_owned(),
+            ));
+        }
+        (Some(other), _) => {
+            return Err(error(
+                g,
+                Kind::Argument,
+                format!("value must be \"terminal\" or \"returns\", not {other:?}"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Applies the search options in `kw` to `args`.
 pub(crate) fn apply_options(g: Gil, kw: &Kwargs<'_>, args: &mut SearchArgs) -> CResult<()> {
@@ -110,6 +143,7 @@ pub(crate) fn apply_options(g: Gil, kw: &Kwargs<'_>, args: &mut SearchArgs) -> C
             "gumbel_m, c_visit and c_scale need root=\"gumbel\"".to_owned(),
         ));
     }
+    apply_value(g, kw, args)?;
     match (kw.f64(g, "noise_alpha")?, kw.f64(g, "noise_epsilon")?) {
         (Some(alpha), Some(epsilon)) => *args = args.clone().with_noise(alpha, epsilon),
         (None, None) => {}

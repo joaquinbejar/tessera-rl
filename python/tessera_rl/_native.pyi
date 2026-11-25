@@ -545,6 +545,8 @@ def make_search(
     gumbel_m: int | None = None,
     c_visit: float | None = None,
     c_scale: float | None = None,
+    value: str | None = None,
+    discount: float | None = None,
 ) -> Search: ...
 def make_search_group(
     *,
@@ -566,5 +568,7 @@ def make_search_group(
     gumbel_m: int | None = None,
     c_visit: float | None = None,
     c_scale: float | None = None,
+    value: str | None = None,
+    discount: float | None = None,
 ) -> SearchGroup: ...
 def onnx_load(*, library: str, accept_telemetry: bool = False) -> dict[str, Any]: ...

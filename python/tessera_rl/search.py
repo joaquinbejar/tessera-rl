@@ -149,6 +149,14 @@ class Search:
     and non-negative. Those three keywords without ``root="gumbel"``, and
     ``noise_alpha`` with it, raise ``ArgumentError`` or ``SearchError``.
 
+    ``value`` is ``"terminal"`` (the default: values in ``[-1, 1]``, the
+    final reward at terminal nodes) or ``"returns"`` (each edge backs up ``r + discount * V``, discounted step rewards plus
+    the value below, with min-max normalization for selection and the
+    Gumbel root). ``discount`` (finite, in ``[0, 1]``, default 1.0) needs
+    ``value="returns"``. ``"returns"`` needs one mover on every path, a
+    single-agent environment such as ``tessera/Gather-v1``; Connect Four
+    raises ``SearchError``.
+
     The search starts at a fresh game; ``set_root`` moves it."""
 
     def __init__(self, env_id: str = "tessera/Connect4-v1", **options):
