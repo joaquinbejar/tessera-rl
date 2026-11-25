@@ -1083,6 +1083,7 @@ field tessera_rl::engine::PoolOptions.illegal_action: tessera_rl_engine::masks::
 field tessera_rl::engine::PoolOptions.mask_budget_bytes: u64
 field tessera_rl::engine::PoolOptions.max_episode_steps: core::option::Option<core::num::nonzero::NonZeroU32>
 field tessera_rl::engine::PoolOptions.num_envs: core::num::nonzero::NonZeroU32
+field tessera_rl::engine::PoolOptions.output_allocator: core::option::Option<alloc::sync::Arc<dyn tessera_rl_engine::buffer::external::OutputAllocator>>
 field tessera_rl::engine::PoolOptions.schedule: tessera_rl_engine::options::Schedule
 field tessera_rl::engine::PoolOptions.seed: tessera_rl_num::identity::Seed
 field tessera_rl::engine::PoolOptions.simd_level: core::option::Option<tessera_rl_simd::dispatch::Level>
@@ -1578,6 +1579,7 @@ field tessera_rl::prelude::PoolOptions.illegal_action: tessera_rl_engine::masks:
 field tessera_rl::prelude::PoolOptions.mask_budget_bytes: u64
 field tessera_rl::prelude::PoolOptions.max_episode_steps: core::option::Option<core::num::nonzero::NonZeroU32>
 field tessera_rl::prelude::PoolOptions.num_envs: core::num::nonzero::NonZeroU32
+field tessera_rl::prelude::PoolOptions.output_allocator: core::option::Option<alloc::sync::Arc<dyn tessera_rl_engine::buffer::external::OutputAllocator>>
 field tessera_rl::prelude::PoolOptions.schedule: tessera_rl_engine::options::Schedule
 field tessera_rl::prelude::PoolOptions.seed: tessera_rl_num::identity::Seed
 field tessera_rl::prelude::PoolOptions.simd_level: core::option::Option<tessera_rl_simd::dispatch::Level>
@@ -4790,6 +4792,12 @@ impl tessera_rl::engine::EpochReport: impl core::marker::Sync for tessera_rl_eng
 impl tessera_rl::engine::EpochReport: impl core::marker::Unpin for tessera_rl_engine::adaptive::report::EpochReport
 impl tessera_rl::engine::EpochReport: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_engine::adaptive::report::EpochReport
 impl tessera_rl::engine::EpochReport: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_engine::adaptive::report::EpochReport
+impl tessera_rl::engine::ExternalAlloc: impl !core::marker::Send for tessera_rl_engine::buffer::external::ExternalAlloc
+impl tessera_rl::engine::ExternalAlloc: impl !core::marker::Sync for tessera_rl_engine::buffer::external::ExternalAlloc
+impl tessera_rl::engine::ExternalAlloc: impl !core::panic::unwind_safe::RefUnwindSafe for tessera_rl_engine::buffer::external::ExternalAlloc
+impl tessera_rl::engine::ExternalAlloc: impl !core::panic::unwind_safe::UnwindSafe for tessera_rl_engine::buffer::external::ExternalAlloc
+impl tessera_rl::engine::ExternalAlloc: impl core::fmt::Debug for tessera_rl_engine::buffer::external::ExternalAlloc
+impl tessera_rl::engine::ExternalAlloc: impl core::marker::Unpin for tessera_rl_engine::buffer::external::ExternalAlloc
 impl tessera_rl::engine::HalfGenerations: impl core::clone::Clone for tessera_rl_engine::modes::pipelined::HalfGenerations
 impl tessera_rl::engine::HalfGenerations: impl core::fmt::Debug for tessera_rl_engine::modes::pipelined::HalfGenerations
 impl tessera_rl::engine::HalfGenerations: impl core::marker::Send for tessera_rl_engine::modes::pipelined::HalfGenerations
@@ -5020,9 +5028,7 @@ impl tessera_rl::engine::PoolContext: impl core::panic::unwind_safe::UnwindSafe 
 impl tessera_rl::engine::PoolOptions: impl core::clone::Clone for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::engine::PoolOptions: impl core::cmp::PartialEq for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::engine::PoolOptions: impl core::fmt::Debug for tessera_rl_engine::options::PoolOptions
-impl tessera_rl::engine::PoolOptions: impl core::marker::Copy for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::engine::PoolOptions: impl core::marker::Send for tessera_rl_engine::options::PoolOptions
-impl tessera_rl::engine::PoolOptions: impl core::marker::StructuralPartialEq for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::engine::PoolOptions: impl core::marker::Sync for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::engine::PoolOptions: impl core::marker::Unpin for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::engine::PoolOptions: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_engine::options::PoolOptions
@@ -7547,9 +7553,7 @@ impl tessera_rl::prelude::PoolContext: impl core::panic::unwind_safe::UnwindSafe
 impl tessera_rl::prelude::PoolOptions: impl core::clone::Clone for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::prelude::PoolOptions: impl core::cmp::PartialEq for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::prelude::PoolOptions: impl core::fmt::Debug for tessera_rl_engine::options::PoolOptions
-impl tessera_rl::prelude::PoolOptions: impl core::marker::Copy for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::prelude::PoolOptions: impl core::marker::Send for tessera_rl_engine::options::PoolOptions
-impl tessera_rl::prelude::PoolOptions: impl core::marker::StructuralPartialEq for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::prelude::PoolOptions: impl core::marker::Sync for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::prelude::PoolOptions: impl core::marker::Unpin for tessera_rl_engine::options::PoolOptions
 impl tessera_rl::prelude::PoolOptions: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_engine::options::PoolOptions
@@ -8715,6 +8719,10 @@ method tessera_rl::engine::EnvPool::workers: fn workers(&self) -> usize
 method tessera_rl::engine::EpisodeStats::mean_length: fn mean_length(&self) -> core::option::Option<f64>
 method tessera_rl::engine::EpisodeStats::mean_return: fn mean_return(&self) -> core::option::Option<f64>
 method tessera_rl::engine::EpisodeStats::var_return: fn var_return(&self) -> core::option::Option<f64>
+method tessera_rl::engine::ExternalAlloc::is_empty: const fn is_empty(&self) -> bool
+method tessera_rl::engine::ExternalAlloc::len: const fn len(&self) -> usize
+method tessera_rl::engine::ExternalAlloc::new: unsafe fn new(ptr: core::ptr::non_null::NonNull<u8>, len: usize, owner: alloc::boxed::Box<dyn core::marker::Send + core::marker::Sync>) -> Self
+method tessera_rl::engine::ExternalAlloc::ptr: const fn ptr(&self) -> core::ptr::non_null::NonNull<u8>
 method tessera_rl::engine::HalfGenerations::half: fn half(&self, half: usize) -> core::option::Option<u64>
 method tessera_rl::engine::HalfToken::acting: fn acting(&self) -> &[tessera_rl_core::bool8::Bool8]
 method tessera_rl::engine::HalfToken::agent_terminated: fn agent_terminated(&self) -> &[tessera_rl_core::bool8::Bool8]
@@ -8741,6 +8749,7 @@ method tessera_rl::engine::MaskProvider::head_active: fn head_active(_cfg: &<E a
 method tessera_rl::engine::MaskProvider::head_parents: fn head_parents(_cfg: &<E as tessera_rl_core::env::Environment>::Config, _head: usize) -> [core::option::Option<u16>; 2] (provided)
 method tessera_rl::engine::MaskProvider::noop: fn noop(cfg: &<E as tessera_rl_core::env::Environment>::Config, state: &<E as tessera_rl_core::env::Environment>::State, agent: tessera_rl_core::agent::AgentSlot, out: &mut tessera_rl_core::io::ActionWriter<'_>) (required)
 method tessera_rl::engine::MaskProvider::write_mask: fn write_mask(cfg: &<E as tessera_rl_core::env::Environment>::Config, state: &<E as tessera_rl_core::env::Environment>::State, agent: tessera_rl_core::agent::AgentSlot, out: &mut tessera_rl_core::io::MaskWriter<'_>) (required)
+method tessera_rl::engine::OutputAllocator::allocate: fn allocate(&self, len: usize, align: usize) -> core::option::Option<tessera_rl_engine::buffer::external::ExternalAlloc> (required)
 method tessera_rl::engine::OutputStorage::bytes: fn bytes(&self) -> usize
 method tessera_rl::engine::OutputStorage::generation: fn generation(&self) -> u64
 method tessera_rl::engine::OutputStorage::region: fn region(&self, field: tessera_rl_engine::buffer::storage::OutputField) -> core::option::Option<tessera_rl_engine::buffer::storage::OutputRegion>
@@ -9911,6 +9920,7 @@ struct tessera_rl::engine::DecodedRecord<E: tessera_rl_core::env::Environment>
 struct tessera_rl::engine::EnvPool<E: tessera_rl_core::env::Environment, M: tessera_rl_engine::masks::MaskProvider<E> = tessera_rl_engine::masks::NoMasks>
 struct tessera_rl::engine::EpisodeStats
 struct tessera_rl::engine::EpochReport
+struct tessera_rl::engine::ExternalAlloc
 struct tessera_rl::engine::HalfGenerations
 struct tessera_rl::engine::HalfToken<E: tessera_rl_core::env::Environment, M: tessera_rl_engine::masks::MaskProvider<E>>
 struct tessera_rl::engine::IdGenerations
@@ -10188,6 +10198,7 @@ trait tessera_rl::core::state_enum::StateEnum: trait StateEnum: core::marker::Co
 trait tessera_rl::core::state_init::StateInit: trait StateInit: core::marker::Sized (not dyn)
 trait tessera_rl::engine::Curriculum: trait Curriculum<E: tessera_rl_core::env::Environment>: core::marker::Send + core::marker::Sync + 'static (not dyn)
 trait tessera_rl::engine::MaskProvider: trait MaskProvider<E: tessera_rl_core::env::Environment>: 'static (not dyn)
+trait tessera_rl::engine::OutputAllocator: trait OutputAllocator: core::marker::Send + core::marker::Sync + 'static
 trait tessera_rl::engine::PersistMask: trait PersistMask<E: tessera_rl_core::env::Environment>: tessera_rl_engine::masks::MaskProvider<E> + tessera_rl_engine::masks::sealed::Sealed (not dyn)
 trait tessera_rl::engine::league::LeagueSubsystem: trait LeagueSubsystem: sealed::Sealed + core::marker::Send
 trait tessera_rl::engine::league::OpponentPolicies: trait OpponentPolicies: sealed::Sealed + core::marker::Send
@@ -10421,6 +10432,7 @@ variant tessera_rl::engine::EngineError::NothingInFlight
 variant tessera_rl::engine::EngineError::OpponentAction { instance: u32, slot: u16 }
 variant tessera_rl::engine::EngineError::OpponentPolicy(tessera_rl_engine::league::onnx::OpponentPolicyError)
 variant tessera_rl::engine::EngineError::Options { option: &'static str, reason: &'static str }
+variant tessera_rl::engine::EngineError::OutputAllocation { reason: &'static str }
 variant tessera_rl::engine::EngineError::Panicked
 variant tessera_rl::engine::EngineError::PendingReset { id: u32 }
 variant tessera_rl::engine::EngineError::Poisoned
@@ -10693,6 +10705,7 @@ variant tessera_rl::prelude::EngineError::NothingInFlight
 variant tessera_rl::prelude::EngineError::OpponentAction { instance: u32, slot: u16 }
 variant tessera_rl::prelude::EngineError::OpponentPolicy(tessera_rl_engine::league::onnx::OpponentPolicyError)
 variant tessera_rl::prelude::EngineError::Options { option: &'static str, reason: &'static str }
+variant tessera_rl::prelude::EngineError::OutputAllocation { reason: &'static str }
 variant tessera_rl::prelude::EngineError::Panicked
 variant tessera_rl::prelude::EngineError::PendingReset { id: u32 }
 variant tessera_rl::prelude::EngineError::Poisoned

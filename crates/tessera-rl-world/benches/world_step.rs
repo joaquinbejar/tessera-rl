@@ -30,7 +30,8 @@ fn bench(c: &mut Criterion) {
     let options = PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(1));
     let mut group = c.benchmark_group("world_pool_64");
     for (agents, size) in [(16, 32), (64, 64), (128, 96)] {
-        let mut pool = EnvPool::<Survival, NoMasks>::new(cfg(agents, size), options).unwrap();
+        let mut pool =
+            EnvPool::<Survival, NoMasks>::new(cfg(agents, size), options.clone()).unwrap();
         pool.reset_all(Reseed::Keep).unwrap();
         // Scattered moves and acts, two heads per agent slot.
         let actions: Vec<i32> = (0..N as usize * MAX_AGENTS * 2)

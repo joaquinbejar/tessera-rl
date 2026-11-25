@@ -308,7 +308,7 @@ fn test_acrobot_import_checks_the_terminal_predicate_by_end_flags() {
 #[test]
 fn test_acrobot_import_before_the_first_reset_takes_the_exact_default() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
-    let fresh = Pool::new(AcrobotConfig::default(), options).unwrap();
+    let fresh = Pool::new(AcrobotConfig::default(), options.clone()).unwrap();
     let rec = DecodedRecord::from(fresh.snapshot(0).unwrap());
     let mut q = Pool::new(AcrobotConfig::default(), options).unwrap();
     q.import(&[0], &[rec]).unwrap();

@@ -75,8 +75,11 @@ pub use buffer::batch::{BatchRow, BatchToken, BatchWaiter};
 #[cfg(not(loom))]
 pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{
-    OUTPUT_ALIGN, OUTPUT_MIN_ALIGN, OutputDtype, OutputField, OutputRegion, OutputStorage,
+    ExternalAlloc, OUTPUT_ALIGN, OUTPUT_MIN_ALIGN, OutputAllocator, OutputDtype, OutputField,
+    OutputRegion, OutputStorage,
 };
+#[cfg(feature = "test-hooks")]
+pub use buffer::{VecAllocStats, VecOutputAllocator};
 pub use error::{EngineError, NanSite};
 #[cfg(feature = "host")]
 pub use host::{

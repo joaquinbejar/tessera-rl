@@ -82,7 +82,7 @@ fn test_shared_league_step_does_not_allocate_on_any_thread() {
     };
     let mut pools: Vec<EnvPool<PaddleDuel, NoMasks>> = (0..2)
         .map(|role| {
-            EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), options)
+            EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), options.clone())
                 .unwrap()
                 .with_league(
                     &[1],

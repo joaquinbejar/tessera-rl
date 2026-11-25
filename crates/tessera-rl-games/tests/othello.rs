@@ -736,7 +736,7 @@ fn test_othello_import_rejects_a_dead_player() {
 #[test]
 fn test_othello_never_reset_record_round_trips_and_continues() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(11));
-    let p = EnvPool::<Othello, Masked>::with_masks(CFG, options).unwrap();
+    let p = EnvPool::<Othello, Masked>::with_masks(CFG, options.clone()).unwrap();
     let rec = DecodedRecord::from(p.snapshot(0).unwrap());
     assert_eq!(*rec.state(), OthelloState::default());
     let mut q = EnvPool::<Othello, Masked>::with_masks(CFG, options).unwrap();

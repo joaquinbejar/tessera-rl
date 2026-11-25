@@ -10,7 +10,9 @@
 //! # Invariants
 //!
 //! 1. The allocation is made once, zeroed, and never resized or freed
-//!    before the last `Arc` is dropped. Every element type is valid for the
+//!    before the last `Arc` is dropped. It is either the engine's own
+//!    (`alloc_zeroed`) or an [`ExternalAlloc`] from the pool's
+//!    [`OutputAllocator`] (ADR-0084), zeroed by the engine as well. Every element type is valid for the
 //!    all-zero bit pattern ([`Element`]).
 //! 2. Regions are disjoint: offsets come from one running sum. The
 //!    allocation starts at an [`OUTPUT_ALIGN`] (16 KiB) boundary;
@@ -38,6 +40,7 @@ use std::sync::Arc;
 
 use tessera_rl_core::Bool8;
 
+use super::external::{ExternalAlloc, OutputAllocator};
 use crate::error::EngineError;
 use crate::sys::sync::{AtomicU64, Ordering};
 
@@ -181,11 +184,31 @@ struct Entry {
     dtype: OutputDtype,
 }
 
+/// Where the memory of an [`OutputStorage`] comes from.
+enum Memory {
+    /// The engine's own `alloc_zeroed(layout)` at `base`.
+    Owned { base: NonNull<u8>, layout: Layout },
+    /// Caller-provided memory (ADR-0084); its owner frees it on drop.
+    External(
+        #[cfg_attr(
+            any(not(test), loom),
+            expect(dead_code, reason = "held for its drop, which releases the memory")
+        )]
+        ExternalAlloc,
+    ),
+}
+
 /// The single allocation holding every output buffer of a pool.
 pub struct OutputStorage {
-    /// Start of the zeroed allocation of `layout`, owned by this storage.
+    /// Start of the zeroed allocation, `size` bytes long: the owned
+    /// allocation's base or the external range's `ptr`.
     base: NonNull<u8>,
-    layout: Layout,
+    /// Bytes of the allocation the engine uses: the requested size (the
+    /// layout rounded up to [`OUTPUT_ALIGN`]). An external range may be
+    /// longer; its tail is zeroed at adoption and never part of a region or
+    /// of this size, so nothing exposes it.
+    size: usize,
+    memory: Memory,
     bytes: usize,
     entries: Vec<Entry>,
     generation: AtomicU64,
@@ -195,20 +218,29 @@ impl core::fmt::Debug for OutputStorage {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OutputStorage")
             .field("bytes", &self.bytes())
+            .field("size", &self.size)
             .field("regions", &self.entries.len())
             .field("generation", &self.generation())
+            .field("external", &matches!(self.memory, Memory::External(_)))
             .finish_non_exhaustive()
     }
 }
 
 impl Drop for OutputStorage {
     fn drop(&mut self) {
-        // SAFETY: `base` was returned by `alloc_zeroed(self.layout)` in
-        // `StorageBuilder::finish` and is freed only here, once; no `Buf`
-        // outlives the storage (each holds an `Arc` to it).
-        #[expect(unsafe_code, reason = "audited module: shared output storage")]
-        unsafe {
-            std::alloc::dealloc(self.base.as_ptr(), self.layout);
+        match &self.memory {
+            Memory::Owned { base, layout } => {
+                // SAFETY: `base` was returned by `alloc_zeroed(layout)` in
+                // `StorageBuilder::finish` and is freed only here, once; no
+                // `Buf` outlives the storage (each holds an `Arc` to it).
+                #[expect(unsafe_code, reason = "audited module: shared output storage")]
+                unsafe {
+                    std::alloc::dealloc(base.as_ptr(), *layout);
+                }
+            }
+            // The external owner is dropped with the field, once, right
+            // after this (ADR-0084 item 4); the engine never frees `ptr`.
+            Memory::External(_) => {}
         }
     }
 }
@@ -218,9 +250,17 @@ impl Drop for OutputStorage {
 // engine calls (invariant 4); the generation is atomic.
 #[expect(unsafe_code, reason = "audited module: shared output storage")]
 unsafe impl Sync for OutputStorage {}
-// SAFETY: as for `Sync`; the storage owns its allocation.
+// SAFETY: as for `Sync`; the storage owns its allocation, or holds an
+// external one whose owner is `Send + Sync` and whose drop is safe on any
+// thread (`ExternalAlloc::new`'s contract).
 #[expect(unsafe_code, reason = "audited module: shared output storage")]
 unsafe impl Send for OutputStorage {}
+// The external arm's boxed owner would make the storage (and the `Outputs`
+// and views holding it) neither `UnwindSafe` nor `RefUnwindSafe`. The owner
+// is only kept alive and dropped, never called, so a caught panic cannot
+// observe it half-updated; the bytes follow invariant 4 either way.
+impl core::panic::UnwindSafe for OutputStorage {}
+impl core::panic::RefUnwindSafe for OutputStorage {}
 
 impl OutputStorage {
     /// The write generation: incremented before every engine call that
@@ -336,24 +376,51 @@ impl StorageBuilder {
     }
 
     /// Allocates the zeroed storage, [`OUTPUT_ALIGN`]-aligned and at least
-    /// one page long. Its regions are handed out only by the returned
-    /// [`Regions`], once each. `None` on overflow or when the allocator
-    /// returns null (never `handle_alloc_error`).
-    pub(crate) fn finish(self) -> Option<Regions> {
+    /// one page long: with `alloc_zeroed`, or from `allocator` when one is
+    /// set (ADR-0084 item 2). Its regions are handed out only by the
+    /// returned [`Regions`], once each.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Options`] (`num_envs`, buffers too large) on overflow
+    /// or when `alloc_zeroed` returns null (never `handle_alloc_error`);
+    /// [`EngineError::OutputAllocation`] when `allocator` returns `None`, a
+    /// shorter range or a misaligned pointer.
+    pub(crate) fn finish(
+        self,
+        allocator: Option<&dyn OutputAllocator>,
+    ) -> Result<Regions, EngineError> {
+        let too_large = || EngineError::Options {
+            option: "num_envs",
+            reason: "buffers too large",
+        };
         let size = self
             .bytes
-            .checked_next_multiple_of(OUTPUT_ALIGN)?
+            .checked_next_multiple_of(OUTPUT_ALIGN)
+            .ok_or_else(too_large)?
             .max(OUTPUT_ALIGN);
-        let layout = Layout::from_size_align(size, OUTPUT_ALIGN).ok()?;
-        // SAFETY: `layout` has a non-zero size (at least one page).
-        #[expect(unsafe_code, reason = "audited module: shared output storage")]
-        let base = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })?;
+        let (base, size, memory) = match allocator {
+            None => {
+                let layout =
+                    Layout::from_size_align(size, OUTPUT_ALIGN).map_err(|_| too_large())?;
+                // SAFETY: `layout` has a non-zero size (at least one page).
+                #[expect(unsafe_code, reason = "audited module: shared output storage")]
+                let base = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+                    .ok_or_else(too_large)?;
+                (base, size, Memory::Owned { base, layout })
+            }
+            Some(allocator) => {
+                let ext = adopt(allocator.allocate(size, OUTPUT_ALIGN), size)?;
+                (ext.ptr(), size, Memory::External(ext))
+            }
+        };
         let taken = vec![false; self.entries.len()];
-        Some(Regions {
+        Ok(Regions {
             builder: self.id,
             storage: Arc::new(OutputStorage {
                 base,
-                layout,
+                size,
+                memory,
                 bytes: self.bytes,
                 entries: self.entries,
                 generation: AtomicU64::new(0),
@@ -361,6 +428,34 @@ impl StorageBuilder {
             taken,
         })
     }
+}
+
+/// Checks an external allocation of at least `size` bytes (ADR-0084 item
+/// 2) and zeroes all of it, so element validity (invariant 1) never depends
+/// on the allocator. A refused allocation is dropped here, which releases
+/// it through its owner.
+fn adopt(ext: Option<ExternalAlloc>, size: usize) -> Result<ExternalAlloc, EngineError> {
+    let ext = ext.ok_or(EngineError::OutputAllocation {
+        reason: "the allocator returned no memory",
+    })?;
+    if ext.len() < size {
+        return Err(EngineError::OutputAllocation {
+            reason: "the allocation is shorter than requested",
+        });
+    }
+    if ext.ptr().as_ptr().align_offset(OUTPUT_ALIGN) != 0 {
+        return Err(EngineError::OutputAllocation {
+            reason: "the allocation is not aligned to OUTPUT_ALIGN",
+        });
+    }
+    // SAFETY: `ptr..ptr + len` is valid and writable and written by the
+    // engine only (`ExternalAlloc::new`'s contract), and nothing reads it
+    // yet: no region of it has been handed out.
+    #[expect(unsafe_code, reason = "audited module: external output memory")]
+    unsafe {
+        core::ptr::write_bytes(ext.ptr().as_ptr(), 0, ext.len());
+    }
+    Ok(ext)
 }
 
 /// The only source of [`Buf`]s: one per region of its storage, at most once
@@ -477,16 +572,28 @@ impl<T> DerefMut for Buf<T> {
 #[cfg(test)]
 #[cfg(not(loom))]
 mod tests {
+    use super::super::external::VecOutputAllocator;
     use super::*;
 
-    fn storage() -> (Arc<OutputStorage>, Buf<f32>, Buf<Bool8>, Buf<u8>) {
+    type Parts = (Arc<OutputStorage>, Buf<f32>, Buf<Bool8>, Buf<u8>);
+
+    fn storage() -> Parts {
+        storage_with(None)
+    }
+
+    /// Both storage arms: the engine's allocation and an external one.
+    fn arms() -> [Parts; 2] {
+        [storage(), storage_with(Some(&VecOutputAllocator::new()))]
+    }
+
+    fn storage_with(allocator: Option<&dyn OutputAllocator>) -> Parts {
         let mut builder = StorageBuilder::new().unwrap();
         let rewards = builder.reserve::<f32>(OutputField::Rewards, 5).unwrap();
         let alive = builder.reserve::<Bool8>(OutputField::Alive, 3).unwrap();
         let obs = builder
             .reserve::<u8>(OutputField::Observation(0), 7)
             .unwrap();
-        let mut regions = builder.finish().unwrap();
+        let mut regions = builder.finish(allocator).unwrap();
         let rewards = regions.take(rewards).unwrap();
         let alive = regions.take(alive).unwrap();
         let obs = regions.take(obs).unwrap();
@@ -495,47 +602,49 @@ mod tests {
 
     #[test]
     fn test_storage_regions_disjoint_aligned_and_zeroed() {
-        let (s, r, f, o) = storage();
-        assert!(r.iter().all(|x| x.to_bits() == 0));
-        assert!(f.iter().all(|x| !x.get()));
-        assert!(o.iter().all(|x| *x == 0));
-        let rr = s.region(OutputField::Rewards).unwrap();
-        let fr = s.region(OutputField::Alive).unwrap();
-        let or = s.region(OutputField::Observation(0)).unwrap();
-        assert_eq!((rr.len, rr.dtype), (5, OutputDtype::F32));
-        assert_eq!(
-            rr.ptr.align_offset(OUTPUT_ALIGN),
-            0,
-            "first region at the base"
-        );
-        assert_eq!(fr.ptr.align_offset(OUTPUT_MIN_ALIGN), 0);
-        assert_eq!(or.ptr.align_offset(OUTPUT_ALIGN), 0);
-        assert!(rr.ptr.wrapping_add(20) <= fr.ptr);
-        assert!(fr.ptr.wrapping_add(3) <= or.ptr);
-        assert_eq!(s.region(OutputField::Masks), None);
+        for (s, r, f, o) in arms() {
+            assert!(r.iter().all(|x| x.to_bits() == 0));
+            assert!(f.iter().all(|x| !x.get()));
+            assert!(o.iter().all(|x| *x == 0));
+            let rr = s.region(OutputField::Rewards).unwrap();
+            let fr = s.region(OutputField::Alive).unwrap();
+            let or = s.region(OutputField::Observation(0)).unwrap();
+            assert_eq!((rr.len, rr.dtype), (5, OutputDtype::F32));
+            assert_eq!(
+                rr.ptr.align_offset(OUTPUT_ALIGN),
+                0,
+                "first region at the base"
+            );
+            assert_eq!(fr.ptr.align_offset(OUTPUT_MIN_ALIGN), 0);
+            assert_eq!(or.ptr.align_offset(OUTPUT_ALIGN), 0);
+            assert!(rr.ptr.wrapping_add(20) <= fr.ptr);
+            assert!(fr.ptr.wrapping_add(3) <= or.ptr);
+            assert_eq!(s.region(OutputField::Masks), None);
+        }
     }
 
     #[test]
     fn test_storage_writes_visible_through_region_and_outlive_bufs() {
-        let (s, mut r, mut f, mut o) = storage();
-        s.begin_write();
-        r.copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]);
-        f.fill(Bool8::TRUE);
-        o.fill(9);
-        drop((r, f, o));
-        assert_eq!(s.generation(), 1);
-        let reg = s.region(OutputField::Rewards).unwrap();
-        // SAFETY: the region is 5 aligned, initialized `f32`s of a live
-        // storage, and no `Buf` (the only writer) exists any more.
-        #[expect(unsafe_code, reason = "test of the audited module")]
-        #[expect(clippy::cast_ptr_alignment, reason = "regions are page-aligned")]
-        let rewards = unsafe { core::slice::from_raw_parts(reg.ptr.cast::<f32>(), reg.len) };
-        assert_eq!(rewards, &[1.0, 2.0, 3.0, 4.0, 5.0]);
-        let reg = s.region(OutputField::Observation(0)).unwrap();
-        // SAFETY: as above, 7 bytes.
-        #[expect(unsafe_code, reason = "test of the audited module")]
-        let obs = unsafe { core::slice::from_raw_parts(reg.ptr, reg.len) };
-        assert_eq!(obs, &[9; 7]);
+        for (s, mut r, mut f, mut o) in arms() {
+            s.begin_write();
+            r.copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+            f.fill(Bool8::TRUE);
+            o.fill(9);
+            drop((r, f, o));
+            assert_eq!(s.generation(), 1);
+            let reg = s.region(OutputField::Rewards).unwrap();
+            // SAFETY: the region is 5 aligned, initialized `f32`s of a live
+            // storage, and no `Buf` (the only writer) exists any more.
+            #[expect(unsafe_code, reason = "test of the audited module")]
+            #[expect(clippy::cast_ptr_alignment, reason = "regions are page-aligned")]
+            let rewards = unsafe { core::slice::from_raw_parts(reg.ptr.cast::<f32>(), reg.len) };
+            assert_eq!(rewards, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+            let reg = s.region(OutputField::Observation(0)).unwrap();
+            // SAFETY: as above, 7 bytes.
+            #[expect(unsafe_code, reason = "test of the audited module")]
+            let obs = unsafe { core::slice::from_raw_parts(reg.ptr, reg.len) };
+            assert_eq!(obs, &[9; 7]);
+        }
     }
 
     #[test]
@@ -544,7 +653,7 @@ mod tests {
         let mut b = StorageBuilder::new().unwrap();
         let from_b = b.reserve::<f32>(OutputField::Rewards, 1 << 20).unwrap();
         let first = a.reserve::<f32>(OutputField::Rewards, 1).unwrap();
-        let mut regions = a.finish().unwrap();
+        let mut regions = a.finish(None).unwrap();
         // Same index 0, but another builder (and out of this storage's
         // bounds): refused, not an out-of-bounds view.
         assert!(regions.take(from_b).is_none());
@@ -577,10 +686,10 @@ mod tests {
 
     #[test]
     fn test_output_storage_empty_layout_allocates_one_page_ok() {
-        let regions = StorageBuilder::new().unwrap().finish().unwrap();
+        let regions = StorageBuilder::new().unwrap().finish(None).unwrap();
         let s = regions.storage();
         assert_eq!(s.bytes(), 0);
-        assert_eq!(s.layout.size(), OUTPUT_ALIGN);
+        assert_eq!(s.size, OUTPUT_ALIGN);
         assert_eq!(s.base.as_ptr().align_offset(OUTPUT_ALIGN), 0);
     }
 
@@ -605,40 +714,41 @@ mod tests {
 
     #[test]
     fn test_output_storage_padding_zero_and_unexposed_true() {
-        let (s, mut rewards, mut alive, mut obs) = storage();
-        s.begin_write();
-        rewards.fill(f32::from_bits(u32::MAX));
-        alive.fill(Bool8::TRUE);
-        obs.fill(0xFF);
-        drop((rewards, alive, obs));
-        let mut inside = vec![false; s.layout.size()];
-        for field in [
-            OutputField::Rewards,
-            OutputField::Alive,
-            OutputField::Observation(0),
-        ] {
-            let entry = s.entries.iter().find(|e| e.field == field).unwrap();
-            let size = match entry.dtype {
-                OutputDtype::F32 | OutputDtype::U32 => 4,
-                OutputDtype::U8 | OutputDtype::Bool8 => 1,
-            };
-            let end = entry.offset + entry.len * size;
-            for byte in &mut inside[entry.offset..end] {
-                assert!(!*byte, "regions overlap");
-                *byte = true;
+        for (s, mut rewards, mut alive, mut obs) in arms() {
+            s.begin_write();
+            rewards.fill(f32::from_bits(u32::MAX));
+            alive.fill(Bool8::TRUE);
+            obs.fill(0xFF);
+            drop((rewards, alive, obs));
+            let mut inside = vec![false; s.size];
+            for field in [
+                OutputField::Rewards,
+                OutputField::Alive,
+                OutputField::Observation(0),
+            ] {
+                let entry = s.entries.iter().find(|e| e.field == field).unwrap();
+                let size = match entry.dtype {
+                    OutputDtype::F32 | OutputDtype::U32 => 4,
+                    OutputDtype::U8 | OutputDtype::Bool8 => 1,
+                };
+                let end = entry.offset + entry.len * size;
+                for byte in &mut inside[entry.offset..end] {
+                    assert!(!*byte, "regions overlap");
+                    *byte = true;
+                }
+                // A region never reaches the start of the next one.
+                if let Some(next) = s.entries.iter().find(|n| n.offset > entry.offset) {
+                    assert!(end <= next.offset);
+                }
             }
-            // A region never reaches the start of the next one.
-            if let Some(next) = s.entries.iter().find(|n| n.offset > entry.offset) {
-                assert!(end <= next.offset);
-            }
-        }
-        // SAFETY: the whole allocation is live and initialized (zeroed,
-        // then written only through the regions), and no `Buf` exists.
-        #[expect(unsafe_code, reason = "test of the audited module")]
-        let all = unsafe { core::slice::from_raw_parts(s.base.as_ptr(), s.layout.size()) };
-        for (i, byte) in all.iter().enumerate() {
-            if !inside[i] {
-                assert_eq!(*byte, 0, "padding byte {i} was written");
+            // SAFETY: the whole allocation is live and initialized (zeroed,
+            // then written only through the regions), and no `Buf` exists.
+            #[expect(unsafe_code, reason = "test of the audited module")]
+            let all = unsafe { core::slice::from_raw_parts(s.base.as_ptr(), s.size) };
+            for (i, byte) in all.iter().enumerate() {
+                if !inside[i] {
+                    assert_eq!(*byte, 0, "padding byte {i} was written");
+                }
             }
         }
     }
@@ -659,7 +769,7 @@ mod tests {
         let second = builder
             .reserve::<u8>(OutputField::PrivilegedState(1), 3)
             .unwrap();
-        let mut regions = builder.finish().unwrap();
+        let mut regions = builder.finish(None).unwrap();
         let s = Arc::clone(regions.storage());
         let mut obs = regions.take(obs).unwrap();
         let mut first = regions.take(first).unwrap();
@@ -697,6 +807,202 @@ mod tests {
         assert_eq!(s.region(OutputField::PrivilegedState(2)), None);
     }
 
+    /// A small layout over `allocator`: one reward and one observation
+    /// leaf, a page and a bit (small enough for Miri).
+    fn small(allocator: &dyn OutputAllocator) -> Result<Regions, EngineError> {
+        let mut b = StorageBuilder::new().unwrap();
+        let _ = b.reserve::<f32>(OutputField::Rewards, 3).unwrap();
+        let _ = b.reserve::<u8>(OutputField::Observation(0), 5).unwrap();
+        b.finish(Some(allocator))
+    }
+
+    #[test]
+    fn test_storage_external_adopts_range_and_zeroes_it() {
+        let alloc = VecOutputAllocator::new();
+        let stats = alloc.stats();
+        let regions = small(&alloc).unwrap();
+        let s = Arc::clone(regions.storage());
+        drop(regions);
+        assert_eq!(stats.allocations(), 1);
+        assert!(matches!(s.memory, Memory::External(_)));
+        // Requested: the layout rounded to `OUTPUT_ALIGN`, two pages here.
+        assert_eq!(s.size, 2 * OUTPUT_ALIGN);
+        assert_eq!(s.base.as_ptr().align_offset(OUTPUT_ALIGN), 0);
+        let Memory::External(ext) = &s.memory else {
+            panic!("not external")
+        };
+        assert_eq!(ext.ptr(), s.base);
+        let rewards = s.region(OutputField::Rewards).unwrap();
+        assert_eq!(rewards.ptr, s.base.as_ptr().cast_const());
+        // SAFETY: the whole range is live and initialized, and no `Buf`
+        // exists.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let all = unsafe { core::slice::from_raw_parts(s.base.as_ptr(), s.size) };
+        // The allocator filled its memory with 0xA5: the engine zeroed it.
+        assert!(all.iter().all(|b| *b == 0));
+        assert_eq!(stats.drops(), 0);
+        drop(s);
+        assert_eq!(stats.drops(), 1);
+    }
+
+    #[test]
+    fn test_storage_external_drops_owner_once_after_last_arc() {
+        let alloc = VecOutputAllocator::new();
+        let stats = alloc.stats();
+        let mut b = StorageBuilder::new().unwrap();
+        let slot = b.reserve::<u32>(OutputField::Generations, 4).unwrap();
+        let mut regions = b.finish(Some(&alloc)).unwrap();
+        let mut buf = regions.take(slot).unwrap();
+        let view = Arc::clone(regions.storage());
+        drop(regions);
+        view.begin_write();
+        buf.fill(7);
+        drop(buf);
+        assert_eq!(stats.drops(), 0, "a view keeps the memory alive");
+        let reg = view.region(OutputField::Generations).unwrap();
+        // SAFETY: 4 aligned, initialized `u32`s of a live storage; no `Buf`
+        // exists any more.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        #[expect(clippy::cast_ptr_alignment, reason = "regions are 64-byte aligned")]
+        let got = unsafe { core::slice::from_raw_parts(reg.ptr.cast::<u32>(), reg.len) };
+        assert_eq!(got, &[7; 4]);
+        drop(view);
+        assert_eq!(stats.drops(), 1);
+        assert_eq!(stats.drop_threads(), vec![std::thread::current().id()]);
+    }
+
+    /// Counts drops of a refused allocation's owner.
+    struct Counted {
+        _buf: Vec<u8>,
+        drops: Arc<core::sync::atomic::AtomicUsize>,
+    }
+
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.drops
+                .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Returns `ptr = aligned + skew` with `len = requested - short`.
+    struct Bad {
+        skew: usize,
+        short: usize,
+        drops: Arc<core::sync::atomic::AtomicUsize>,
+    }
+
+    impl OutputAllocator for Bad {
+        fn allocate(&self, len: usize, align: usize) -> Option<ExternalAlloc> {
+            let mut buf = vec![0_u8; len + 2 * align];
+            let base = buf.as_mut_ptr();
+            let offset = base.align_offset(align) + self.skew;
+            let ptr = NonNull::new(base.wrapping_add(offset))?;
+            let owner = Counted {
+                _buf: buf,
+                drops: Arc::clone(&self.drops),
+            };
+            // SAFETY: `ptr..ptr + len - short` lies inside `buf`'s block
+            // (`offset < 2 * align`), kept alive by `owner`, which frees its
+            // own base; nothing else touches it.
+            #[expect(unsafe_code, reason = "test of the audited module")]
+            Some(unsafe { ExternalAlloc::new(ptr, len - self.short, Box::new(owner)) })
+        }
+    }
+
+    struct Nothing;
+
+    /// A range `OUTPUT_MIN_ALIGN` bytes longer than asked.
+    struct Longer;
+
+    impl OutputAllocator for Longer {
+        fn allocate(&self, len: usize, align: usize) -> Option<ExternalAlloc> {
+            VecOutputAllocator::new().allocate(len + OUTPUT_MIN_ALIGN, align)
+        }
+    }
+
+    impl OutputAllocator for Nothing {
+        fn allocate(&self, _: usize, _: usize) -> Option<ExternalAlloc> {
+            None
+        }
+    }
+
+    #[test]
+    fn test_storage_external_none_is_refused_with_typed_error() {
+        assert_eq!(
+            small(&Nothing).unwrap_err(),
+            EngineError::OutputAllocation {
+                reason: "the allocator returned no memory"
+            }
+        );
+    }
+
+    #[test]
+    fn test_storage_external_short_is_refused_and_released() {
+        let drops = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+        let bad = Bad {
+            skew: 0,
+            short: 1,
+            drops: Arc::clone(&drops),
+        };
+        assert_eq!(
+            small(&bad).unwrap_err(),
+            EngineError::OutputAllocation {
+                reason: "the allocation is shorter than requested"
+            }
+        );
+        assert_eq!(drops.load(core::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_storage_external_misaligned_is_refused_and_released() {
+        let drops = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+        for skew in [1, OUTPUT_MIN_ALIGN, OUTPUT_ALIGN / 2] {
+            let bad = Bad {
+                skew,
+                short: 0,
+                drops: Arc::clone(&drops),
+            };
+            assert_eq!(
+                small(&bad).unwrap_err(),
+                EngineError::OutputAllocation {
+                    reason: "the allocation is not aligned to OUTPUT_ALIGN"
+                },
+                "skew {skew}"
+            );
+        }
+        assert_eq!(drops.load(core::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_storage_external_exact_and_longer_ranges_are_accepted() {
+        let drops = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+        let exact = Bad {
+            skew: 0,
+            short: 0,
+            drops: Arc::clone(&drops),
+        };
+        let s = Arc::clone(small(&exact).unwrap().storage());
+        assert_eq!(s.size, 2 * OUTPUT_ALIGN);
+        drop(s);
+        assert_eq!(drops.load(core::sync::atomic::Ordering::SeqCst), 1);
+        // A range longer than asked is adopted whole, and zeroed whole.
+        let s = Arc::clone(small(&Longer).unwrap().storage());
+        assert_eq!(
+            s.size,
+            2 * OUTPUT_ALIGN,
+            "the tail is not part of the storage"
+        );
+        let Memory::External(ext) = &s.memory else {
+            panic!("not external")
+        };
+        assert_eq!(ext.len(), 2 * OUTPUT_ALIGN + OUTPUT_MIN_ALIGN);
+        // SAFETY: the whole external range is live and initialized (zeroed
+        // at adoption), and no `Buf` exists.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let all = unsafe { core::slice::from_raw_parts(ext.ptr().as_ptr(), ext.len()) };
+        assert!(all.iter().all(|b| *b == 0), "the tail is zeroed too");
+    }
+
     #[test]
     fn test_storage_reserve_overflow_returns_none() {
         let mut b = StorageBuilder::new().unwrap();
@@ -719,7 +1025,7 @@ mod loom_tests {
         loom::model(|| {
             let mut b = StorageBuilder::new().unwrap();
             let _ = b.reserve::<u32>(OutputField::Generations, 1);
-            let s = Arc::clone(b.finish().unwrap().storage());
+            let s = Arc::clone(b.finish(None).unwrap().storage());
             let reader = {
                 let s = Arc::clone(&s);
                 thread::spawn(move || {
@@ -734,6 +1040,32 @@ mod loom_tests {
             let seen = reader.join().unwrap();
             assert!(seen <= 2);
             assert_eq!(s.generation(), 2);
+        });
+    }
+
+    /// ADR-0084 item 4: whichever thread drops the last reference to an
+    /// external storage drops its owner, exactly once, in every
+    /// interleaving. The storage's own `Arc` is `std`'s, so the shared
+    /// handle is a loom `Arc` around it.
+    #[test]
+    fn test_storage_external_last_arc_on_another_thread_drops_owner_once() {
+        loom::model(|| {
+            let alloc = super::super::external::VecOutputAllocator::new();
+            let stats = alloc.stats();
+            let mut b = StorageBuilder::new().unwrap();
+            let _ = b.reserve::<u32>(OutputField::Generations, 1);
+            let s = Arc::clone(b.finish(Some(&alloc)).unwrap().storage());
+            let shared = crate::sys::sync::Arc::new(s);
+            let other = crate::sys::sync::Arc::clone(&shared);
+            let t = thread::spawn(move || {
+                other.begin_write();
+                drop(other);
+            });
+            drop(shared);
+            t.join().unwrap();
+            assert_eq!(stats.allocations(), 1);
+            assert_eq!(stats.drops(), 1);
+            assert_eq!(stats.drop_threads().len(), 1);
         });
     }
 }

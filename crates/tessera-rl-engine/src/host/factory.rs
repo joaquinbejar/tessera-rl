@@ -157,7 +157,7 @@ where
     E::Config: ConfigDecode + tessera_rl_core::config::CanonicalConfig + Send,
 {
     let cfg = E::Config::decode(config)?;
-    let pool = HostPool::<E, A>::new(cfg, *options.pool())?.with_dyn_snapshots();
+    let pool = HostPool::<E, A>::new(cfg, options.pool().clone())?.with_dyn_snapshots();
     start(pool, options)
 }
 
@@ -171,7 +171,7 @@ where
     E::Config: ConfigDecode + Send,
 {
     let cfg = E::Config::decode(config)?;
-    start(HostPool::<E, A>::new(cfg, *options.pool())?, options)
+    start(HostPool::<E, A>::new(cfg, options.pool().clone())?, options)
 }
 
 /// Starts the workers `options` asks for and erases the pool's type.

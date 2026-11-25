@@ -177,6 +177,13 @@ impl<E: PrivilegedState, M: MaskProvider<E>> EnvPool<E, M> {
                 reason: "the state space cannot hold a Set",
             });
         }
+        // A construction step, before the first reset: the storage is laid
+        // out again, from the same output allocator if one is set. Its
+        // outputs may already have been exported (`outputs()` works before
+        // any reset), so with an allocator an exported storage is refused
+        // rather than replaced (ADR-0084 item 3b).
+        self.outputs
+            .check_replaceable(self.options.output_allocator.as_deref())?;
         let num_envs = self.headers.len();
         let mut outputs = Outputs::new_with(
             num_envs,
@@ -185,6 +192,7 @@ impl<E: PrivilegedState, M: MaskProvider<E>> EnvPool<E, M> {
             self.options.auto_reset == AutoReset::SameStep,
             self.outputs.mask_len,
             &layout.leaves,
+            self.options.output_allocator.as_deref(),
         )?;
         outputs.sets = self.outputs.sets;
         self.outputs = outputs;

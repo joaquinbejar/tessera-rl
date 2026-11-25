@@ -377,6 +377,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             options.auto_reset == AutoReset::SameStep,
             mask_len,
             E::REFUSES_AGENTS,
+            options.output_allocator.as_deref(),
         )?;
         // Every instance is pending its first reset, and `outputs()` is
         // readable before any call (ADR-0065 item 1).

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use tessera_rl_core::Bool8;
 
-use crate::buffer::{Buf, OutputField, OutputStorage, StorageBuilder};
+use crate::buffer::{Buf, OutputAllocator, OutputField, OutputStorage, StorageBuilder};
 use crate::error::EngineError;
 
 use crate::layout::{Leaf, MAX_LEAVES, SetSpans};
@@ -59,6 +59,9 @@ pub struct Outputs {
     /// Set by every [`Outputs::view_all`]: this engine call has started a
     /// write generation, so the privileged rows may be written in it too.
     written: bool,
+    /// Strong references to the storage held by this `Outputs` itself (one
+    /// per `Buf`), counted at construction: any more are exports.
+    held: usize,
 }
 
 /// The sizes of a layout besides its leaves.
@@ -102,14 +105,15 @@ impl Outputs {
         leaves: &[Leaf],
         terminal: bool,
         mask_len: usize,
+        allocator: Option<&dyn OutputAllocator>,
     ) -> Result<Self, EngineError> {
-        Self::new_with(num_envs, agents, leaves, terminal, mask_len, &[])
+        Self::new_with(num_envs, agents, leaves, terminal, mask_len, &[], allocator)
     }
 
     /// As [`Outputs::new`], plus one privileged state region per leaf of
     /// `privileged`, `[num_envs, leaf bytes]` (ADR-0079 item 7), laid out
     /// after every other buffer, so the other offsets are those of a pool
-    /// without them.
+    /// without them. `allocator` is the pool's output allocator (ADR-0084).
     pub(crate) fn new_with(
         num_envs: usize,
         agents: usize,
@@ -117,6 +121,7 @@ impl Outputs {
         terminal: bool,
         mask_len: usize,
         privileged: &[Leaf],
+        allocator: Option<&dyn OutputAllocator>,
     ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
         let parts = Parts {
@@ -126,10 +131,7 @@ impl Outputs {
             mask_len,
             host: None,
         };
-        Self::lay_out(b, &parts, leaves, privileged).ok_or(EngineError::Options {
-            option: "num_envs",
-            reason: "buffers too large",
-        })
+        Self::lay_out(b, &parts, leaves, privileged, allocator)
     }
 
     /// As [`Outputs::new`], plus the host-only rows `aborted`, `abort_code`
@@ -144,6 +146,7 @@ impl Outputs {
         terminal: bool,
         mask_len: usize,
         refuses: bool,
+        allocator: Option<&dyn OutputAllocator>,
     ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
         let parts = Parts {
@@ -153,22 +156,44 @@ impl Outputs {
             mask_len,
             host: Some(refuses),
         };
-        Self::lay_out(b, &parts, leaves, &[]).ok_or(EngineError::Options {
-            option: "num_envs",
-            reason: "buffers too large",
-        })
+        Self::lay_out(b, &parts, leaves, &[], allocator)
     }
 
+    /// Lays the buffers out in `b` and allocates them: an overflow is
+    /// [`EngineError::Options`] (`num_envs`, buffers too large), an
+    /// allocator refusal [`EngineError::OutputAllocation`].
+    fn lay_out(
+        b: StorageBuilder,
+        parts: &Parts,
+        leaves: &[Leaf],
+        privileged: &[Leaf],
+        allocator: Option<&dyn OutputAllocator>,
+    ) -> Result<Self, EngineError> {
+        let mut outputs = Self::lay_out_inner(b, parts, leaves, privileged, allocator).unwrap_or(
+            Err(EngineError::Options {
+                option: "num_envs",
+                reason: "buffers too large",
+            }),
+        )?;
+        // Counted here, after `lay_out_inner` returned and dropped its
+        // `Regions` (which holds one more reference).
+        outputs.held = Arc::strong_count(outputs.rewards.storage());
+        Ok(outputs)
+    }
+
+    /// [`Outputs::lay_out`]: `None` on overflow, `Some(Err)` when the
+    /// allocation fails.
     #[expect(
         clippy::too_many_lines,
         reason = "one reservation and one take per output region, in layout order"
     )]
-    fn lay_out(
+    fn lay_out_inner(
         mut b: StorageBuilder,
         parts: &Parts,
         leaves: &[Leaf],
         privileged: &[Leaf],
-    ) -> Option<Self> {
+        allocator: Option<&dyn OutputAllocator>,
+    ) -> Option<Result<Self, EngineError>> {
         let Parts {
             num_envs,
             agents,
@@ -243,7 +268,10 @@ impl Outputs {
                 )
             })
             .collect::<Option<Vec<_>>>()?;
-        let mut r = b.finish()?;
+        let mut r = match b.finish(allocator) {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e)),
+        };
         let host = match host {
             Some((aborted, abort_code, pending_reset, refused, refuse_code)) => Some(HostBufs {
                 aborted: r.take(aborted)?,
@@ -254,7 +282,7 @@ impl Outputs {
             }),
             None => None,
         };
-        Some(Self {
+        Some(Ok(Self {
             agents,
             observations: obs
                 .into_iter()
@@ -290,7 +318,25 @@ impl Outputs {
                 .collect::<Option<_>>()?,
             privileged_bytes: privileged.iter().map(|l| l.bytes).collect(),
             written: false,
-        })
+            held: 0,
+        }))
+    }
+
+    /// Refuses to replace a storage that was exported (ADR-0084 item 3b):
+    /// with an output allocator set, a construction step that lays the
+    /// outputs out again would leave an exporter (a view, a capsule, a
+    /// pointer registered with a device) on the old allocation while the
+    /// pool writes the new one.
+    pub(crate) fn check_replaceable(
+        &self,
+        allocator: Option<&dyn OutputAllocator>,
+    ) -> Result<(), EngineError> {
+        if allocator.is_some() && Arc::strong_count(self.rewards.storage()) > self.held {
+            return Err(EngineError::OutputAllocation {
+                reason: "the output storage was exported and cannot be replaced",
+            });
+        }
+        Ok(())
     }
 
     /// The shared storage of every output buffer, for read-only borrowers:

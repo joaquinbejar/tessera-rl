@@ -23,7 +23,8 @@ fn bench(c: &mut Criterion) {
     // Both slots send a column; only the acting one is read, and a full
     // column is replaced by the no-op.
     let actions: Vec<i32> = (0..N * 2).map(|i| ((i * 3) % 7).cast_signed()).collect();
-    let mut pool = EnvPool::<Connect4, Masked>::with_masks(Connect4Config {}, options).unwrap();
+    let mut pool =
+        EnvPool::<Connect4, Masked>::with_masks(Connect4Config {}, options.clone()).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
     group.bench_function("connect4", |b| {
         b.iter(|| {
@@ -38,7 +39,7 @@ fn bench(c: &mut Criterion) {
     });
     // Leduc: calls and raises; a raise past the limit is the no-op.
     let bets: Vec<i32> = (0..N * 2).map(|i| (1 + i % 2).cast_signed()).collect();
-    let mut leduc = EnvPool::<Leduc, Masked>::with_masks(LeducConfig {}, options).unwrap();
+    let mut leduc = EnvPool::<Leduc, Masked>::with_masks(LeducConfig {}, options.clone()).unwrap();
     leduc.reset_all(Reseed::Keep).unwrap();
     group.bench_function("leduc", |b| {
         b.iter(|| {
@@ -53,7 +54,8 @@ fn bench(c: &mut Criterion) {
     });
     // Othello: scattered squares; an illegal one is the no-op.
     let squares: Vec<i32> = (0..N * 2).map(|i| ((i * 37) % 65).cast_signed()).collect();
-    let mut othello = EnvPool::<Othello, Masked>::with_masks(OthelloConfig {}, options).unwrap();
+    let mut othello =
+        EnvPool::<Othello, Masked>::with_masks(OthelloConfig {}, options.clone()).unwrap();
     othello.reset_all(Reseed::Keep).unwrap();
     group.bench_function("othello", |b| {
         b.iter(|| {

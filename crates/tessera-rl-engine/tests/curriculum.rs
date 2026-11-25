@@ -536,7 +536,7 @@ fn test_curriculum_lane_wise_state_reads_targets_as_the_row_store_does() {
             auto_reset,
             ..options()
         };
-        let mut rows = Pool::new(LevelConfig::default(), opts)
+        let mut rows = Pool::new(LevelConfig::default(), opts.clone())
             .unwrap()
             .with_curriculum(Raise)
             .unwrap();

@@ -43,7 +43,7 @@ fn once<R>(name: &str, f: impl FnOnce() -> R) -> R {
 fn entries() -> Vec<u64> {
     let options = PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(9));
     let plain = once("new", || {
-        EnvPool::<Counter>::new(CountConfig::default(), options)
+        EnvPool::<Counter>::new(CountConfig::default(), options.clone())
     })
     .unwrap();
     drop(plain);

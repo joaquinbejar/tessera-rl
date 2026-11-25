@@ -240,7 +240,7 @@ fn test_vrp_validate_refuses_broken_states() {
 #[test]
 fn test_vrp_config_refuses_capacity_below_max_demand() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
-    assert!(EnvPool::<Vrp, Masked>::with_masks(cfg(5, 8), options).is_err());
+    assert!(EnvPool::<Vrp, Masked>::with_masks(cfg(5, 8), options.clone()).is_err());
     assert!(EnvPool::<Vrp, Masked>::with_masks(cfg(5, 9), options).is_ok());
 }
 

@@ -35,7 +35,7 @@ pub fn round_256() -> Input {
         length: 1000,
         ..CountConfig::default()
     };
-    let mut probe = EnvPool::<Counter>::new(cfg.clone(), options).unwrap();
+    let mut probe = EnvPool::<Counter>::new(cfg.clone(), options.clone()).unwrap();
     probe.reset_all(Reseed::Keep).unwrap();
     // One action per agent row: the rewards buffer has one value per row.
     let rows = probe.outputs().unwrap().rewards().len();
