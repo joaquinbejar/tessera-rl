@@ -92,7 +92,7 @@ fn check_sizes(
     let (n, a) = (layout.num_envs, layout.agents);
     let rows = n
         .checked_mul(a)
-        .ok_or((Kind::Argument, "layout too large".to_owned()))?;
+        .ok_or_else(|| (Kind::Argument, "layout too large".to_owned()))?;
     if let Some(len) = actions
         && len != rows
     {
@@ -108,20 +108,37 @@ fn check_sizes(
             .try_fold(1usize, |acc, &d| acc.checked_mul(usize::try_from(d).ok()?))?;
         elems.checked_mul(dtype_bytes(l.dtype)?)?.checked_mul(rows)
     };
-    let mut want = Vec::with_capacity(layout.leaves.len() + 9);
-    for l in &layout.leaves {
-        want.push(leaf(l).ok_or((Kind::Argument, "an unsupported leaf".to_owned()))?);
-    }
-    want.extend([rows * 4, rows, rows, rows, rows, rows * 4, n, n]);
-    if layout.mask_len > 0 {
-        want.push(rows * layout.mask_len);
-    }
-    let got = outs.iter().map(|o| o.len());
-    if outs.len() != want.len() || !got.zip(&want).all(|(g, &w)| g == w) {
-        return Err((
+    // Compared one buffer at a time, with no collection: this runs on
+    // every step and reset, so it must not allocate (REVIEW-B-r2).
+    let mismatch = || {
+        (
             Kind::Argument,
             "a result buffer's size does not match the layout".to_owned(),
-        ));
+        )
+    };
+    let mut got = outs.iter().map(|o| o.len());
+    let mut expect = |want: Option<usize>| -> Result<(), (Kind, String)> {
+        match (want, got.next()) {
+            (Some(w), Some(g)) if w == g => Ok(()),
+            _ => Err(mismatch()),
+        }
+    };
+    for l in &layout.leaves {
+        expect(leaf(l))?;
+    }
+    let four = rows.checked_mul(4);
+    expect(four)?; // rewards, f32
+    for _ in 0..4 {
+        expect(Some(rows))?; // agent terminated, truncated, alive, acting
+    }
+    expect(four)?; // slot generations, u32
+    expect(Some(n))?; // episode terminated
+    expect(Some(n))?; // episode truncated
+    if layout.mask_len > 0 {
+        expect(rows.checked_mul(layout.mask_len))?;
+    }
+    if got.next().is_some() {
+        return Err(mismatch());
     }
     Ok(())
 }
@@ -348,6 +365,35 @@ mod tests {
         NativeXla::step(pool.as_mut(), &[1, 1], &mut views, &dtypes).unwrap();
         let stepped: Vec<u64> = (0..2).map(|i| pool.state_hash(i).unwrap()).collect();
         assert_ne!(before, stepped, "one step");
+    }
+
+    /// REVIEW-B-r2 point 1: the host's checks and step allocate nothing on
+    /// the success path (the engine's Inline Sync step allocates nothing,
+    /// ADR-0004), measured with the binary's counting allocator.
+    #[test]
+    fn test_xla_host_step_success_path_does_not_allocate() {
+        let mut pool = cartpole(&args()).unwrap();
+        pool.reset(None, &ResetSeed::Keep).unwrap();
+        let dtypes = [
+            DTYPE_F32, DTYPE_F32, DTYPE_PRED, DTYPE_PRED, DTYPE_PRED, DTYPE_PRED, DTYPE_U32,
+            DTYPE_PRED, DTYPE_PRED,
+        ];
+        let sizes = [2 * 4 * 4, 2 * 4, 2, 2, 2, 2, 2 * 4, 2, 2];
+        let mut bufs: Vec<Vec<u8>> = sizes.iter().map(|&n| vec![0; n]).collect();
+        let mut views: Vec<&mut [u8]> = bufs.iter_mut().map(Vec::as_mut_slice).collect();
+        // Warm-up: the first step may touch lazily built state.
+        NativeXla::step(pool.as_mut(), &[1, 1], &mut views, &dtypes).unwrap();
+        for _ in 0..5 {
+            let mut result = Ok(());
+            let n = tessera_rl_pyffi::xla::testing::count(|| {
+                result = NativeXla::step(pool.as_mut(), &[1, 1], &mut views, &dtypes);
+            });
+            result.unwrap();
+            assert_eq!(
+                n, 0,
+                "allocations in check_dtypes, check_sizes, step or outputs_into"
+            );
+        }
     }
 
     /// REVIEW-B-r1 point 2: the host's poison poisons the Env's pool.

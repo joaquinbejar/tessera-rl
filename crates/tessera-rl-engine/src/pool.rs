@@ -776,9 +776,10 @@ where
     /// containment (the XLA FFI binding, ADR-0095): the pool may be
     /// half-stepped, so it is treated exactly as after a worker panic.
     ///
-    /// Not public API: hidden from the docs, for the first-party binding
-    /// (`tessera-rl-py`) only, which cannot reach a crate-private item. A
-    /// public poisoning API would need an ADR note.
+    /// Not public API: `doc(hidden)` puts it outside the ADR-0094 stable
+    /// surface. It is for the first-party binding (`tessera-rl-py`) only,
+    /// which cannot reach a crate-private item; a public poisoning API would
+    /// need an ADR note.
     #[doc(hidden)]
     pub const fn poison(&mut self) {
         self.poisoned = true;
