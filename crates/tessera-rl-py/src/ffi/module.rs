@@ -12,8 +12,8 @@ use tessera_rl_pyffi::ffi::module_def::{
 };
 
 use super::{
-    archive_type, env_type, fork, search_group_type, search_type, snapshot_type, view_type,
-    watch_type,
+    archive_type, env_type, fork, league_fns, search_group_type, search_type, snapshot_type,
+    view_type, watch_type,
 };
 use crate::errors::{Kind, error};
 use tessera_rl_core::Adapters;
@@ -313,7 +313,7 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 42 } else { 35 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 47 } else { 40 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
@@ -377,6 +377,11 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     search_type::MAKER,
     search_group_type::MAKER,
     search_type::ONNX_LOAD,
+    league_fns::ROWS[0],
+    league_fns::ROWS[1],
+    league_fns::ROWS[2],
+    league_fns::ROWS[3],
+    league_fns::ROWS[4],
     #[cfg(feature = "test-hooks")]
     env_type::TEST_MAKERS[0],
     #[cfg(feature = "test-hooks")]

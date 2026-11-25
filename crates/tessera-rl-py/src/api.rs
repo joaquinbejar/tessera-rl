@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 16] = [
+const POOL_KEYS: [&str; 18] = [
     "mode",
     "batch_size",
     "gather",
@@ -122,6 +122,8 @@ const POOL_KEYS: [&str; 16] = [
     "transforms",
     "policy_map",
     "privileged_state",
+    "league",
+    "role",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -224,6 +226,13 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
             .transpose()
             .map_err(|e| error(g, Kind::Argument, e))?,
         privileged_state: kw.bool(g, "privileged_state")?.unwrap_or(false),
+        league: match kw.u64(g, "league")? {
+            None => None,
+            Some(h) => Some((
+                crate::league_api::league(h).map_err(|e| error(g, Kind::Argument, e))?,
+                usize::try_from(kw.u32(g, "role")?.unwrap_or(0)).unwrap_or(usize::MAX),
+            )),
+        },
     })
 }
 

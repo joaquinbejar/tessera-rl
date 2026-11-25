@@ -28,8 +28,8 @@ pub(crate) fn policy_spec(text: &str) -> Result<PolicySpec, String> {
     let group = |name: &str| {
         PolicyGroup::from_name(name.trim()).ok_or_else(|| {
             format!(
-                "policy_map groups are \"learner\", \"external\", \"heuristic\" or \
-                 \"privileged_heuristic\", not {name:?}"
+                "policy_map groups are \"learner\", \"external\", \"heuristic\", \
+                 \"privileged_heuristic\" or \"opponent\", not {name:?}"
             )
         })
     };
@@ -81,15 +81,15 @@ fn groups_of(spec: &PolicySpec, slots: usize) -> Result<Vec<PolicyGroup>, BindEr
     }
 }
 
-/// The map's learner and external part, and its heuristic and privileged
-/// heuristic slots.
-type Split = (PolicyMap, Vec<usize>, Vec<usize>);
+/// The map's learner and external part, and its heuristic, privileged
+/// heuristic and opponent slots.
+type Split = (PolicyMap, Vec<usize>, Vec<usize>, Vec<usize>);
 
 fn split(groups: &[PolicyGroup]) -> Split {
     let base = groups
         .iter()
         .map(|&g| {
-            if g.is_heuristic() {
+            if g.is_heuristic() || g == PolicyGroup::Opponent {
                 PolicyGroup::Learner
             } else {
                 g
@@ -108,7 +108,50 @@ fn split(groups: &[PolicyGroup]) -> Split {
         PolicyMap::from_groups(base),
         slots(PolicyGroup::Heuristic),
         slots(PolicyGroup::PrivilegedHeuristic),
+        slots(PolicyGroup::Opponent),
     )
+}
+
+/// The league of `args` for `opponents`: both or neither (`ArgumentError`).
+/// A league with an ONNX policy is refused (`CapabilityError`): ONNX
+/// opponents from Python come later (rev, E3 plan ruling 2).
+fn league_for(
+    args: &PoolArgs,
+    opponents: &[usize],
+) -> Result<
+    Option<(
+        tessera_rl_engine::league::LeagueView,
+        tessera_rl_league::RoleHandle,
+    )>,
+    BindError,
+> {
+    match (&args.league, opponents.is_empty()) {
+        (None, true) => Ok(None),
+        (None, false) => Err(BindError::Argument(
+            "an \"opponent\" slot needs league=".to_owned(),
+        )),
+        (Some(_), true) => Err(BindError::Argument(
+            "league= needs an \"opponent\" slot in policy_map".to_owned(),
+        )),
+        (Some((league, role)), false) => {
+            let view = league
+                .view(*role)
+                .map_err(|e| BindError::Argument(e.to_string()))?;
+            if let Some(i) = view
+                .kinds()
+                .iter()
+                .position(|k| matches!(k, tessera_rl_engine::league::OpponentKind::Onnx { .. }))
+            {
+                return Err(BindError::Capability(format!(
+                    "league policy {i} is an ONNX opponent: ONNX opponents from Python come later"
+                )));
+            }
+            let member = league
+                .member(*role)
+                .map_err(|e| BindError::Argument(e.to_string()))?;
+            Ok(Some((view, member)))
+        }
+    }
 }
 
 /// Applies `args.policy_map` to a perfect-information environment whose
@@ -118,17 +161,22 @@ pub(crate) fn perfect<E: Heuristic, M: MaskProvider<E>>(
     args: &PoolArgs,
 ) -> Result<EnvPool<E, M>, BindError> {
     let Some(spec) = &args.policy_map else {
+        league_for(args, &[])?;
         return Ok(pool);
     };
-    let (base, heuristic, privileged) = split(&groups_of(spec, E::MAX_AGENTS)?);
+    let (base, heuristic, privileged, opponents) = split(&groups_of(spec, E::MAX_AGENTS)?);
     if !privileged.is_empty() {
         return Err(BindError::Capability(
             "privileged_heuristic slots are for imperfect-information environments".to_owned(),
         ));
     }
-    Ok(pool
+    let pool = pool
         .with_policy_map(base)?
-        .with_heuristic_slots(&heuristic)?)
+        .with_heuristic_slots(&heuristic)?;
+    match league_for(args, &opponents)? {
+        Some((view, member)) => Ok(pool.with_league(&opponents, view, Box::new(member))?),
+        None => Ok(pool),
+    }
 }
 
 /// Applies `args.policy_map` to an imperfect-information environment:
@@ -140,16 +188,23 @@ pub(crate) fn info<E: InfoHeuristic + Heuristic, M: MaskProvider<E>>(
     args: &PoolArgs,
 ) -> Result<EnvPool<E, M>, BindError> {
     let Some(spec) = &args.policy_map else {
+        league_for(args, &[])?;
         return Ok(pool);
     };
-    let (base, heuristic, privileged) = split(&groups_of(spec, E::MAX_AGENTS)?);
+    let (base, heuristic, privileged, opponents) = split(&groups_of(spec, E::MAX_AGENTS)?);
     let pool = pool.with_policy_map(base)?;
-    match (heuristic.is_empty(), privileged.is_empty()) {
-        (_, true) => Ok(pool.with_info_heuristic_slots(&heuristic)?),
-        (true, false) => Ok(pool.with_privileged_heuristic_slots(&privileged)?),
-        (false, false) => Err(BindError::Capability(
-            "a pool runs heuristic or privileged_heuristic slots, not both".to_owned(),
-        )),
+    let pool = match (heuristic.is_empty(), privileged.is_empty()) {
+        (_, true) => pool.with_info_heuristic_slots(&heuristic)?,
+        (true, false) => pool.with_privileged_heuristic_slots(&privileged)?,
+        (false, false) => {
+            return Err(BindError::Capability(
+                "a pool runs heuristic or privileged_heuristic slots, not both".to_owned(),
+            ));
+        }
+    };
+    match league_for(args, &opponents)? {
+        Some((view, member)) => Ok(pool.with_info_league(&opponents, view, Box::new(member))?),
+        None => Ok(pool),
     }
 }
 
@@ -160,10 +215,20 @@ pub(crate) fn plain<E: tessera_rl_core::Environment, M: MaskProvider<E>>(
     pool: EnvPool<E, M>,
     args: &PoolArgs,
 ) -> Result<EnvPool<E, M>, BindError> {
+    if args.league.is_some() {
+        return Err(BindError::Capability(
+            "this environment has no in-engine league opponents (league=)".to_owned(),
+        ));
+    }
     let Some(spec) = &args.policy_map else {
         return Ok(pool);
     };
     let groups = groups_of(spec, E::MAX_AGENTS)?;
+    if groups.contains(&PolicyGroup::Opponent) {
+        return Err(BindError::Capability(
+            "this environment has no in-engine league opponents (\"opponent\")".to_owned(),
+        ));
+    }
     if pool.policy_groups() == groups.as_slice() {
         return Ok(pool);
     }
@@ -212,7 +277,7 @@ mod tests {
         );
         assert!(groups_of(&spec, 1).is_err());
         assert!(groups_of(&PolicySpec::List(vec![PolicyGroup::Learner]), 2).is_err());
-        let (base, heuristic, privileged) = split(&[
+        let (base, heuristic, privileged, _) = split(&[
             PolicyGroup::External,
             PolicyGroup::Heuristic,
             PolicyGroup::PrivilegedHeuristic,

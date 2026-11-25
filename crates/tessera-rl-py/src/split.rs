@@ -772,6 +772,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             privileged_state: false,
+            league: None,
             pipelined: true,
             asynced: None,
         })
@@ -826,6 +827,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             privileged_state: false,
+            league: None,
             pipelined: true,
             asynced: None,
         };
@@ -941,6 +943,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             privileged_state: false,
+            league: None,
             pipelined: true,
             asynced: None,
         };

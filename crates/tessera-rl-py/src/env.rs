@@ -1302,6 +1302,9 @@ pub(crate) struct PoolArgs {
     /// The policy map (ADR-0079), `None` for the default: every slot a
     /// learner.
     pub(crate) policy_map: Option<crate::policy::PolicySpec>,
+    /// The league of `"opponent"` slots and the pool's role (ADR-0088
+    /// section 10, #384 head E3).
+    pub(crate) league: Option<(tessera_rl_league::SharedLeague, usize)>,
     /// The privileged state buffer (ADR-0079 item 7): only for an
     /// environment that implements `PrivilegedState`, in Sync mode.
     pub(crate) privileged_state: bool,
@@ -2220,6 +2223,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             pipelined: false,
             asynced: None,
             privileged_state: false,
@@ -2319,6 +2323,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             privileged_state: false,
             pipelined: false,
             asynced: None,
@@ -2340,6 +2345,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             privileged_state: false,
             pipelined,
             asynced: None,
@@ -2555,6 +2561,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            league: None,
             privileged_state: false,
             pipelined: false,
             asynced: None,

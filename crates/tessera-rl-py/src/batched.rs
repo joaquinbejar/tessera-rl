@@ -1082,6 +1082,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             privileged_state: false,
+            league: None,
             pipelined,
             asynced,
         }

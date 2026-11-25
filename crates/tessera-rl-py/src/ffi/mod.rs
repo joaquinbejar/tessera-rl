@@ -16,6 +16,7 @@ pub(crate) mod inner {
 
 pub(crate) mod archive_type;
 mod env_type;
+mod league_fns;
 mod module;
 mod search_group_type;
 mod search_type;
