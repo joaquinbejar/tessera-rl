@@ -51,7 +51,9 @@ mod tests {
         assert_eq!(teams, vec![0, 0, 1, 1, 1, 0, 0, 0]);
         assert_eq!(
             roles,
-            vec!["pursuer", "pursuer", "evader", "evader", "evader", "", "", ""]
+            vec![
+                "pursuer", "pursuer", "evader", "evader", "evader", "", "", ""
+            ]
         );
     }
 

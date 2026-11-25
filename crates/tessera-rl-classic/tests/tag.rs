@@ -480,6 +480,8 @@ fn test_tag_team_and_role_follow_the_pursuer_evader_split() {
     assert_eq!(teams, vec![0, 0, 0, 1, 1, 0, 0, 0]);
     assert_eq!(
         roles,
-        vec!["pursuer", "pursuer", "pursuer", "evader", "evader", "", "", ""]
+        vec![
+            "pursuer", "pursuer", "pursuer", "evader", "evader", "", "", ""
+        ]
     );
 }
