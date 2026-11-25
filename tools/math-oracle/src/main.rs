@@ -143,13 +143,13 @@ fn generate(out: &mut impl Write) -> io::Result<()> {
         |values: &mut dyn Iterator<Item = f64>| values.map(hex).collect::<Vec<_>>().join(", ");
     writeln!(
         out,
-        "pub(super) const INPUTS: &[u64] = &[{}];",
+        "pub const INPUTS: &[u64] = &[{}];",
         list(&mut inputs.iter().copied())
     )?;
     for (name, _, oracle) in UNARY {
         writeln!(
             out,
-            "pub(super) const {}: &[u64] = &[{}];",
+            "pub const {}: &[u64] = &[{}];",
             name.to_uppercase(),
             list(&mut inputs.iter().map(|&x| oracle(x)))
         )?;
@@ -158,17 +158,17 @@ fn generate(out: &mut impl Write) -> io::Result<()> {
     erf_inputs.extend(ERF_EDGES.iter().map(|x| -x));
     writeln!(
         out,
-        "pub(super) const ERF_INPUTS: &[u64] = &[{}];",
+        "pub const ERF_INPUTS: &[u64] = &[{}];",
         list(&mut erf_inputs.iter().copied())
     )?;
     writeln!(
         out,
-        "pub(super) const ERF_EDGE: &[u64] = &[{}];",
+        "pub const ERF_EDGE: &[u64] = &[{}];",
         list(&mut erf_inputs.iter().map(|&x| libm::erf(x)))
     )?;
     writeln!(
         out,
-        "pub(super) const ERFC_EDGE: &[u64] = &[{}];",
+        "pub const ERFC_EDGE: &[u64] = &[{}];",
         list(&mut erf_inputs.iter().map(|&x| libm::erfc(x)))
     )?;
     for (name, _, oracle) in BINARY {
@@ -178,7 +178,7 @@ fn generate(out: &mut impl Write) -> io::Result<()> {
             .collect();
         writeln!(
             out,
-            "pub(super) const {}: &[(u64, u64, u64)] = &[{}];",
+            "pub const {}: &[(u64, u64, u64)] = &[{}];",
             name.to_uppercase(),
             rows.join(", ")
         )?;

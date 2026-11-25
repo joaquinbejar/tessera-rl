@@ -1,0 +1,111 @@
+{
+  "protocols": {
+    "1": {
+      "layout_keys": [
+        "num_envs",
+        "agents",
+        "initial_agents",
+        "spawns",
+        "action_choices",
+        "action_bounds",
+        "action_nvec",
+        "mask_len",
+        "mask_heads",
+        "entity_group_heads",
+        "turns",
+        "outputs",
+        "leaves",
+        "env_id",
+        "env_version",
+        "perfect_information",
+        "kind",
+        "auto_reset"
+      ],
+      "members": [
+        "host_protocol",
+        "tessera_rl_min",
+        "tessera_rl_below",
+        "layout",
+        "reset",
+        "step",
+        "close",
+        "is_poisoned",
+        "_tessera_current_generation",
+        "_tessera_set_fp_policy"
+      ],
+      "outputs": [
+        "observations",
+        "terminal_observations",
+        "rewards",
+        "agent_terminated",
+        "agent_truncated",
+        "alive",
+        "acting",
+        "episode_terminated",
+        "episode_truncated",
+        "masks",
+        "slot_generations",
+        "episode_return",
+        "episode_length",
+        "aborted",
+        "abort_code",
+        "pending_reset"
+      ]
+    },
+    "2": {
+      "layout_keys": [
+        "num_envs",
+        "agents",
+        "initial_agents",
+        "spawns",
+        "action_choices",
+        "action_bounds",
+        "action_nvec",
+        "mask_len",
+        "mask_heads",
+        "entity_group_heads",
+        "turns",
+        "outputs",
+        "leaves",
+        "env_id",
+        "env_version",
+        "perfect_information",
+        "kind",
+        "auto_reset",
+        "refuses_agents"
+      ],
+      "members": [
+        "host_protocol",
+        "tessera_rl_min",
+        "tessera_rl_below",
+        "layout",
+        "reset",
+        "step",
+        "close",
+        "is_poisoned",
+        "_tessera_current_generation",
+        "_tessera_set_fp_policy"
+      ],
+      "outputs": [
+        "observations",
+        "terminal_observations",
+        "rewards",
+        "agent_terminated",
+        "agent_truncated",
+        "alive",
+        "acting",
+        "episode_terminated",
+        "episode_truncated",
+        "masks",
+        "slot_generations",
+        "episode_return",
+        "episode_length",
+        "aborted",
+        "abort_code",
+        "pending_reset",
+        "refused",
+        "refuse_code"
+      ]
+    }
+  }
+}
