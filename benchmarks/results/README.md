@@ -39,4 +39,4 @@ run's loads with both bounds in its top-level `loads`
 (`tools/dashboard/envelope.py` writes it). A report marked `load_void` is
 refused. If the reference candidate cannot meet the bound, the fallback
 host is the `ref-x86-alt` record (status `candidate`) of
-`compat/machines.toml`. No flagship file has been admitted yet.
+`compat/machines.toml`. The first flagship files (#640, PR #750) are six indicative runs on `ref-x86-alt` at commit `cd5efdda`, one per flagship; they are not claims, and their numbers are not compared across flagships.

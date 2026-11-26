@@ -1,0 +1,5342 @@
+{
+  "schema": "tessera-dashboard-result/1",
+  "kind": "wall",
+  "measured_at": "2026-11-26T07:06:00Z",
+  "admitted_by": {
+    "pr": 750,
+    "approved_by": [
+      "rev",
+      "team-lead"
+    ]
+  },
+  "report_sha256": "973dd0b4fcf11ffe9197a415a12700b7a5f73c8a1224043693e3019336121338",
+  "report": {
+    "schema": "tessera-bench/3",
+    "quick": false,
+    "runs": 10,
+    "run_orders": [
+      [
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/sync4/n1024"
+      ],
+      [
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/sync4/n1024",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/n1024/snapshot"
+      ],
+      [
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/sync4/n1024"
+      ],
+      [
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/sync4/n1024",
+        "rust/jobshop/n1024/memory"
+      ],
+      [
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/sync4/n1024",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/inline/n1024"
+      ],
+      [
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/sync4/n1024"
+      ],
+      [
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/sync4/n1024"
+      ],
+      [
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/inline/n1024",
+        "rust/jobshop/sync4/n1024",
+        "rust/jobshop/n1024/memory"
+      ],
+      [
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/sync4/n1024",
+        "rust/jobshop/inline/n1024"
+      ],
+      [
+        "rust/jobshop/n1024/memory",
+        "rust/jobshop/n1024/snapshot",
+        "rust/jobshop/syncfull/n1024",
+        "rust/jobshop/sync4/n1024",
+        "rust/jobshop/inline/n1024"
+      ]
+    ],
+    "method": {
+      "warmup_s": 2.0,
+      "reps": 10,
+      "rep_s": 1.0,
+      "batches": 2000,
+      "bootstrap_resamples": 10000,
+      "bootstrap_seed": 0,
+      "runs_for_claims": 10,
+      "max_episode_steps": 500
+    },
+    "pinning": {
+      "cpu_set": [
+        2,
+        4,
+        6,
+        8
+      ],
+      "applied": true,
+      "tool": "taskset",
+      "note": null
+    },
+    "qualification": null,
+    "environment": {
+      "machine": "ref-x86-alt",
+      "machine_record": {
+        "status": "candidate",
+        "wall_clock_gates": "pending: needs an exclusive window",
+        "valid_for": [
+          "golden",
+          "math-diff"
+        ],
+        "host": "lab-x86-2 (shared host; record the load with every run)",
+        "cpu": "AMD Ryzen 7 5800H",
+        "cpu_id": "AMD Ryzen 7 5800H",
+        "cores": "8 cores with SMT (CPUs 2k and 2k + 1 share core k)",
+        "isa": "",
+        "memory": "",
+        "os": "",
+        "kernel": "",
+        "frequency_policy": "",
+        "bench_pinning": "taskset -c 2",
+        "bench_cpu_set": [
+          2,
+          4,
+          6,
+          8
+        ],
+        "turbo": "",
+        "noise_floor_cv": "",
+        "toolchain": ""
+      },
+      "hardware": {
+        "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "arch": "x86_64",
+        "logical_cpus": 16,
+        "os": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43",
+        "frequency_policy": "governor=performance",
+        "affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      },
+      "software": {
+        "tessera_rl": "0.3.0",
+        "native_build_profile": "release",
+        "git": "cd5efdda2edf0435eb0c3067a14c5f937ad5700e",
+        "git_dirty": false,
+        "git_source": ".head",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "python": "3.11.3",
+        "numpy": "2.4.6",
+        "gymnasium": "1.4.0"
+      }
+    },
+    "load_average": {
+      "before": [
+        1.3681640625,
+        1.783203125,
+        1.7802734375
+      ],
+      "after": [
+        1.44091796875,
+        1.83642578125,
+        1.86767578125
+      ]
+    },
+    "results": {
+      "rust/jobshop/inline/n1024": {
+        "config": {
+          "name": "rust/jobshop/inline/n1024",
+          "kind": "rust",
+          "flagship": "tessera/JobShop-v1",
+          "illegal_action_noops": true,
+          "metric": "throughput",
+          "env": "jobshop",
+          "num_envs": 1024,
+          "workers": 0
+        },
+        "metric": "throughput",
+        "unit": "steps/s",
+        "method": {
+          "warmup_s": 2,
+          "reps": 10,
+          "rep_s": 1
+        },
+        "chunk_size": 64,
+        "options": {
+          "seed": 1,
+          "auto_reset": "next_step",
+          "max_episode_steps": 500,
+          "action_batches": 64
+        },
+        "plan_fingerprint": "b088488601ee0bb5",
+        "profile": "release",
+        "pinning": {
+          "worker_cpu_set": "engine default",
+          "process_affinity": "2"
+        },
+        "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "action_policy": "planned",
+        "workers": 0,
+        "schedule": null,
+        "samples": {
+          "median": 2082739.1265,
+          "ci95": [
+            2079981.8985000001,
+            2089261.1895
+          ],
+          "n": 10,
+          "samples": [
+            2079273.6120000002,
+            2083891.415,
+            2085371.9874999998,
+            2081586.838,
+            2078183.6055,
+            2080036.975,
+            2092506.2755,
+            2080690.185,
+            2094600.484,
+            2089261.1895
+          ]
+        },
+        "statistic": "median and 95% bootstrap CI over 10 process medians",
+        "runs": [
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2079273.6120000002,
+              "ci95": [
+                2073774.416,
+                2083299.725
+              ],
+              "n": 10,
+              "samples": [
+                2084154.348,
+                2077677.478,
+                2083012.309,
+                2082445.102,
+                2080640.55,
+                2069871.354,
+                2092801.568,
+                2069781.463,
+                2075550.146,
+                2077906.674
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2083891.415,
+              "ci95": [
+                2081656.842,
+                2086738.05
+              ],
+              "n": 10,
+              "samples": [
+                2081656.842,
+                2080561.084,
+                2070902.77,
+                2086738.05,
+                2087286.589,
+                2092099.546,
+                2084433.715,
+                2085550.42,
+                2082211.655,
+                2083349.115
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2085371.9874999998,
+              "ci95": [
+                2081074.68,
+                2088300.356
+              ],
+              "n": 10,
+              "samples": [
+                2088300.356,
+                2081263.23,
+                2079663.315,
+                2071473.657,
+                2089838.157,
+                2084811.687,
+                2085932.288,
+                2090127.922,
+                2082486.045,
+                2086370.712
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2081586.838,
+              "ci95": [
+                2055106.921,
+                2088614.631
+              ],
+              "n": 10,
+              "samples": [
+                2091267.274,
+                2079280.217,
+                2030933.625,
+                2016504.303,
+                2077121.275,
+                2081269.916,
+                2083378.794,
+                2089794.18,
+                2088614.631,
+                2081903.76
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2078183.6055,
+              "ci95": [
+                2071365.237,
+                2082158.879
+              ],
+              "n": 10,
+              "samples": [
+                2089324.91,
+                2071921.822,
+                2079765.765,
+                2082158.879,
+                2069466.932,
+                2068839.379,
+                2073263.542,
+                2076601.446,
+                2080720.557,
+                2082922.806
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2080036.975,
+              "ci95": [
+                2074815.5729999999,
+                2084318.148
+              ],
+              "n": 10,
+              "samples": [
+                2089776.374,
+                2084554.248,
+                2080679.602,
+                2084318.148,
+                2074402.253,
+                2081255.418,
+                2075228.893,
+                2079394.348,
+                2068304.988,
+                2074965.614
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2092506.2755,
+              "ci95": [
+                2088708.8465,
+                2094405.8805
+              ],
+              "n": 10,
+              "samples": [
+                2091308.163,
+                2092028.866,
+                2093503.818,
+                2095307.943,
+                2093653.958,
+                2104646.122,
+                2092983.685,
+                2089624.018,
+                2084648.003,
+                2086109.53
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2080690.185,
+              "ci95": [
+                2077133.172,
+                2086800.87
+              ],
+              "n": 10,
+              "samples": [
+                2079917.649,
+                2082058.863,
+                2086800.87,
+                2073215.477,
+                2080638.308,
+                2092238.462,
+                2091497.127,
+                2077133.172,
+                2075725.067,
+                2080742.062
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2094600.484,
+              "ci95": [
+                2089134.844,
+                2098309.448
+              ],
+              "n": 10,
+              "samples": [
+                2098309.448,
+                2099326.712,
+                2098401.013,
+                2086301.517,
+                2094879.775,
+                2094321.193,
+                2092710.544,
+                2089134.844,
+                2087444.739,
+                2097115.166
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "samples": {
+              "median": 2089261.1895,
+              "ci95": [
+                2083530.3655,
+                2091979.287
+              ],
+              "n": 10,
+              "samples": [
+                2080701.232,
+                2096672.481,
+                2074914.767,
+                2086359.499,
+                2091410.09,
+                2091731.405,
+                2089876.384,
+                2092548.484,
+                2083796.274,
+                2088645.995
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 0,
+            "schedule": null
+          }
+        ]
+      },
+      "rust/jobshop/sync4/n1024": {
+        "config": {
+          "name": "rust/jobshop/sync4/n1024",
+          "kind": "rust",
+          "flagship": "tessera/JobShop-v1",
+          "illegal_action_noops": true,
+          "metric": "throughput",
+          "env": "jobshop",
+          "num_envs": 1024,
+          "workers": 4,
+          "schedule": "static"
+        },
+        "metric": "throughput",
+        "unit": "steps/s",
+        "method": {
+          "warmup_s": 2,
+          "reps": 10,
+          "rep_s": 1
+        },
+        "chunk_size": 64,
+        "options": {
+          "seed": 1,
+          "auto_reset": "next_step",
+          "max_episode_steps": 500,
+          "action_batches": 64,
+          "schedule": "static"
+        },
+        "plan_fingerprint": "b088488601ee0bb5",
+        "profile": "release",
+        "pinning": {
+          "worker_cpu_set": "[2, 4, 6, 8]",
+          "process_affinity": "2,4,6,8"
+        },
+        "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "action_policy": "planned",
+        "workers": 4,
+        "schedule": "static",
+        "samples": {
+          "median": 5508335.86225,
+          "ci95": [
+            5465311.1175,
+            5549848.44925
+          ],
+          "n": 10,
+          "samples": [
+            5416751.106000001,
+            5511257.775,
+            5436561.6415,
+            5494060.5934999995,
+            5576217.453500001,
+            5573971.6205,
+            5543689.8675,
+            5525725.278,
+            5505413.9495,
+            5487071.911
+          ]
+        },
+        "statistic": "median and 95% bootstrap CI over 10 process medians",
+        "runs": [
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5416751.106000001,
+              "ci95": [
+                5411802.425000001,
+                5434660.535
+              ],
+              "n": 10,
+              "samples": [
+                5437562.376,
+                5436713.574,
+                5433353.984,
+                5432607.496,
+                5417497.763,
+                5416004.449,
+                5412513.177,
+                5410978.691,
+                5411091.673,
+                5411996.1
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5511257.775,
+              "ci95": [
+                5499331.685,
+                5527629.7425
+              ],
+              "n": 10,
+              "samples": [
+                5551975.992,
+                5537406.01,
+                5521701.926,
+                5517290.416,
+                5517853.475,
+                5505225.134,
+                5502106.711,
+                5499331.685,
+                5494625.887,
+                5493515.583
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5436561.6415,
+              "ci95": [
+                5428600.585,
+                5441733.14
+              ],
+              "n": 10,
+              "samples": [
+                5450517.306,
+                5441733.14,
+                5439248.858,
+                5441148.182,
+                5441947.106,
+                5433874.425,
+                5429843.645,
+                5428600.585,
+                5424250.132,
+                5426497.496
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5494060.5934999995,
+              "ci95": [
+                5477053.714,
+                5507860.379
+              ],
+              "n": 10,
+              "samples": [
+                5518838.277,
+                5507860.379,
+                5513101.561,
+                5497763.926,
+                5499184.41,
+                5488555.482,
+                5490357.261,
+                5464081.423,
+                5477053.714,
+                5469614.913
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5576217.453500001,
+              "ci95": [
+                5558725.086,
+                5596947.419
+              ],
+              "n": 10,
+              "samples": [
+                5621246.668,
+                5604940.491,
+                5592912.813,
+                5588954.347,
+                5582261.416,
+                5570173.491,
+                5565729.875,
+                5558725.086,
+                5556894.626,
+                5547538.569
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5573971.6205,
+              "ci95": [
+                5552730.248,
+                5591546.455499999
+              ],
+              "n": 10,
+              "samples": [
+                5619108.199,
+                5596336.782,
+                5590846.915,
+                5586756.129,
+                5577822.657,
+                5570120.584,
+                5566024.913,
+                5550901.442,
+                5552730.248,
+                5542504.188
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5543689.8675,
+              "ci95": [
+                5535238.522,
+                5559227.9385
+              ],
+              "n": 10,
+              "samples": [
+                5578551.551,
+                5564683.086,
+                5553772.791,
+                5554583.736,
+                5543282.275,
+                5544097.46,
+                5542071.068,
+                5535238.522,
+                5527475.137,
+                5523017.218
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5525725.278,
+              "ci95": [
+                5512141.684,
+                5528659.345
+              ],
+              "n": 10,
+              "samples": [
+                5536041.66,
+                5529647.846,
+                5527670.844,
+                5524557.295,
+                5528045.313,
+                5526893.261,
+                5516134.1,
+                5512141.684,
+                5510721.345,
+                5500618.937
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5505413.9495,
+              "ci95": [
+                5497236.5,
+                5520032.981
+              ],
+              "n": 10,
+              "samples": [
+                5528013.657,
+                5522149.498,
+                5520032.981,
+                5471904.983,
+                5507875.013,
+                5505710.968,
+                5500751.481,
+                5505116.931,
+                5497236.5,
+                5493153.627
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5487071.911,
+              "ci95": [
+                5483703.788000001,
+                5500427.272499999
+              ],
+              "n": 10,
+              "samples": [
+                5500384.216,
+                5506810.669,
+                5506101.544,
+                5498111.408,
+                5488483.43,
+                5485660.392,
+                5483126.898,
+                5483764.39,
+                5484280.678,
+                5481011.294
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          }
+        ]
+      },
+      "rust/jobshop/syncfull/n1024": {
+        "config": {
+          "name": "rust/jobshop/syncfull/n1024",
+          "kind": "rust",
+          "flagship": "tessera/JobShop-v1",
+          "illegal_action_noops": true,
+          "metric": "throughput",
+          "env": "jobshop",
+          "num_envs": 1024,
+          "workers": "full",
+          "schedule": "static"
+        },
+        "metric": "throughput",
+        "unit": "steps/s",
+        "method": {
+          "warmup_s": 2,
+          "reps": 10,
+          "rep_s": 1
+        },
+        "chunk_size": 64,
+        "options": {
+          "seed": 1,
+          "auto_reset": "next_step",
+          "max_episode_steps": 500,
+          "action_batches": 64,
+          "schedule": "static"
+        },
+        "plan_fingerprint": "b088488601ee0bb5",
+        "profile": "release",
+        "pinning": {
+          "worker_cpu_set": "[2, 4, 6, 8]",
+          "process_affinity": "2,4,6,8"
+        },
+        "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "action_policy": "planned",
+        "workers": 4,
+        "schedule": "static",
+        "samples": {
+          "median": 5515383.0625,
+          "ci95": [
+            5474198.4245,
+            5565819.547499999
+          ],
+          "n": 10,
+          "samples": [
+            5486203.8005,
+            5462193.0485,
+            5485163.063999999,
+            5415037.811,
+            5542484.1235,
+            5501117.7415,
+            5580120.168500001,
+            5595193.7335,
+            5565819.547499999,
+            5529648.3835
+          ]
+        },
+        "statistic": "median and 95% bootstrap CI over 10 process medians",
+        "runs": [
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5486203.8005,
+              "ci95": [
+                5476267.6095,
+                5499423.092
+              ],
+              "n": 10,
+              "samples": [
+                5510933.967,
+                5501864.383,
+                5499423.092,
+                5492600.195,
+                5491074.958,
+                5481332.643,
+                5479234.561,
+                5478281.45,
+                5470706.982,
+                5471202.576
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5462193.0485,
+              "ci95": [
+                5455592.308,
+                5466894.193
+              ],
+              "n": 10,
+              "samples": [
+                5474996.073,
+                5468193.655,
+                5465594.731,
+                5465576.789,
+                5466664.828,
+                5458809.308,
+                5456920.259,
+                5454889.4,
+                5455592.308,
+                5444479.467
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5485163.063999999,
+              "ci95": [
+                5479295.874,
+                5496444.4375
+              ],
+              "n": 10,
+              "samples": [
+                5503279.483,
+                5501743.539,
+                5492776.914,
+                5491145.336,
+                5485383.532,
+                5484942.596,
+                5480401.504,
+                5479295.874,
+                5474046.506,
+                5470774.813
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5415037.811,
+              "ci95": [
+                5408004.438,
+                5419689.622
+              ],
+              "n": 10,
+              "samples": [
+                5422041.171,
+                5425743.042,
+                5419689.622,
+                5416424.505,
+                5413659.056,
+                5408004.438,
+                5416416.566,
+                5408665.305,
+                5402796.492,
+                5407877.544
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5542484.1235,
+              "ci95": [
+                5523649.182,
+                5561860.469
+              ],
+              "n": 10,
+              "samples": [
+                5577088.592,
+                5564409.115,
+                5561860.469,
+                5556761.656,
+                5545681.306,
+                5539286.941,
+                5530841.603,
+                5523649.182,
+                5517600.901,
+                5510788.307
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5501117.7415,
+              "ci95": [
+                5487870.151,
+                5513347.492000001
+              ],
+              "n": 10,
+              "samples": [
+                5520255.82,
+                5517321.547,
+                5509373.437,
+                5512732.775,
+                5503442.457,
+                5498793.026,
+                5493009.38,
+                5487870.151,
+                5482051.791,
+                5479903.177
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5580120.168500001,
+              "ci95": [
+                5568728.502,
+                5601122.945
+              ],
+              "n": 10,
+              "samples": [
+                5617732.783,
+                5609633.452,
+                5598708.213,
+                5592612.438,
+                5582330.423,
+                5577909.914,
+                5569742.484,
+                5569311.763,
+                5559547.09,
+                5554006.955
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5595193.7335,
+              "ci95": [
+                5574644.923,
+                5613996.989
+              ],
+              "n": 10,
+              "samples": [
+                5629754.107,
+                5617145.947,
+                5613996.989,
+                5609299.048,
+                5601204.322,
+                5589183.145,
+                5579761.8,
+                5574644.923,
+                5569009.161,
+                5557340.251
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5565819.547499999,
+              "ci95": [
+                5554463.681,
+                5586386.4975000005
+              ],
+              "n": 10,
+              "samples": [
+                5603250.731,
+                5596652.201,
+                5579759.071,
+                5576120.794,
+                5562326.937,
+                5569312.158,
+                5554833.575,
+                5552422.739,
+                5556504.623,
+                5548525.672
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          },
+          {
+            "metric": "throughput",
+            "unit": "steps/s",
+            "method": {
+              "warmup_s": 2,
+              "reps": 10,
+              "rep_s": 1
+            },
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64,
+              "schedule": "static"
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "[2, 4, 6, 8]",
+              "process_affinity": "2,4,6,8"
+            },
+            "samples": {
+              "median": 5529648.3835,
+              "ci95": [
+                5513817.746,
+                5543247.052
+              ],
+              "n": 10,
+              "samples": [
+                5558727.426,
+                5545028.37,
+                5543247.052,
+                5532939.929,
+                5526356.838,
+                5533562.874,
+                5521307.181,
+                5513817.746,
+                5507566.894,
+                5510971.639
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned",
+            "workers": 4,
+            "schedule": "static"
+          }
+        ]
+      },
+      "rust/jobshop/n1024/snapshot": {
+        "config": {
+          "name": "rust/jobshop/n1024/snapshot",
+          "kind": "rust",
+          "flagship": "tessera/JobShop-v1",
+          "illegal_action_noops": true,
+          "metric": "snapshot",
+          "env": "jobshop",
+          "num_envs": 1024
+        },
+        "metric": "snapshot",
+        "unit": "ns/instance",
+        "method": {
+          "warmup_s": 2,
+          "warmup_iterations": 478,
+          "reps": 10
+        },
+        "record_bytes": 4612,
+        "chunk_size": 64,
+        "options": {
+          "seed": 1,
+          "auto_reset": "next_step",
+          "max_episode_steps": 500,
+          "action_batches": 64
+        },
+        "plan_fingerprint": "b088488601ee0bb5",
+        "profile": "release",
+        "pinning": {
+          "worker_cpu_set": "engine default",
+          "process_affinity": "2"
+        },
+        "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "action_policy": "planned",
+        "snapshot_copy": {
+          "median": 388.8075,
+          "ci95": [
+            378.9,
+            401.06825000000003
+          ],
+          "n": 10,
+          "samples": [
+            386.7785,
+            390.8365,
+            393.3605,
+            394.00800000000004,
+            384.3905,
+            377.1945,
+            408.776,
+            378.9,
+            422.452,
+            367.236
+          ]
+        },
+        "snapshot_all_copy": {
+          "median": 370.1355,
+          "ci95": [
+            364.406,
+            376.342
+          ],
+          "n": 10,
+          "samples": [
+            385.3455,
+            378.15049999999997,
+            367.44100000000003,
+            368.12350000000004,
+            362.5635,
+            373.4085,
+            364.406,
+            372.1475,
+            376.342,
+            352.7755
+          ]
+        },
+        "restore_with_reobserve": {
+          "median": 523.452,
+          "ci95": [
+            500.056,
+            531.9775
+          ],
+          "n": 10,
+          "samples": [
+            534.7909999999999,
+            503.14200000000005,
+            483.12299999999993,
+            529.437,
+            540.3845,
+            525.0035,
+            516.989,
+            521.9005,
+            439.50350000000003,
+            529.164
+          ]
+        },
+        "import_with_validation_and_reobserve": {
+          "median": 1353.9625,
+          "ci95": [
+            1323.0465,
+            1374.8174999999999
+          ],
+          "n": 10,
+          "samples": [
+            1382.5929999999998,
+            1323.0465,
+            1314.9985,
+            1387.334,
+            1367.042,
+            1356.3665,
+            1341.838,
+            1351.5585,
+            1263.2959999999998,
+            1368.542
+          ]
+        },
+        "fork_with_reobserve": {
+          "median": 346.1055,
+          "ci95": [
+            306.72749999999996,
+            349.656
+          ],
+          "n": 10,
+          "samples": [
+            354.7595,
+            306.72749999999996,
+            290.888,
+            347.89750000000004,
+            351.4145,
+            345.6445,
+            348.683,
+            341.07,
+            244.6315,
+            346.5665
+          ]
+        },
+        "fork_branched_with_reobserve": {
+          "median": 334.54975,
+          "ci95": [
+            287.5425,
+            338.9195
+          ],
+          "n": 10,
+          "samples": [
+            333.0135,
+            287.5425,
+            280.749,
+            336.086,
+            341.514,
+            336.7695,
+            336.32500000000005,
+            331.92150000000004,
+            231.625,
+            343.597
+          ]
+        },
+        "statistic": "median and 95% bootstrap CI over 10 process medians",
+        "runs": [
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 478,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 386.7785,
+              "ci95": [
+                371.6015,
+                401.443
+              ],
+              "n": 10,
+              "samples": [
+                451.883,
+                372.692,
+                390.836,
+                375.763,
+                386.54,
+                415.187,
+                387.017,
+                367.44,
+                367.304,
+                387.699
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 385.3455,
+              "ci95": [
+                376.479,
+                397.453
+              ],
+              "n": 10,
+              "samples": [
+                409.457,
+                385.107,
+                396.976,
+                380.674,
+                382.106,
+                394.111,
+                369.623,
+                400.795,
+                370.852,
+                385.584
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 534.7909999999999,
+              "ci95": [
+                468.15099999999995,
+                564.838
+              ],
+              "n": 10,
+              "samples": [
+                413.277,
+                402.841,
+                753.639,
+                536.326,
+                564.838,
+                571.249,
+                542.056,
+                533.256,
+                523.025,
+                507.474
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1382.5929999999998,
+              "ci95": [
+                1289.8285,
+                1481.224
+              ],
+              "n": 10,
+              "samples": [
+                1205.113,
+                1189.562,
+                1603.657,
+                1481.224,
+                1543.088,
+                1374.544,
+                1374.886,
+                1390.573,
+                1390.3,
+                1333.96
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 354.7595,
+              "ci95": [
+                283.549,
+                373.808
+              ],
+              "n": 10,
+              "samples": [
+                228.382,
+                208.65,
+                378.246,
+                373.808,
+                395.588,
+                362.27,
+                347.59,
+                338.716,
+                361.929,
+                329.088
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 333.0135,
+              "ci95": [
+                272.8975,
+                354.2475
+              ],
+              "n": 10,
+              "samples": [
+                215.956,
+                213.702,
+                341.583,
+                375.379,
+                366.912,
+                331.409,
+                329.839,
+                343.494,
+                334.618,
+                317.413
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 475,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 390.8365,
+              "ci95": [
+                377.7065,
+                424.635
+              ],
+              "n": 10,
+              "samples": [
+                430.467,
+                422.145,
+                374.398,
+                372.557,
+                418.803,
+                396.498,
+                379.65,
+                385.175,
+                381.015,
+                431.217
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 378.15049999999997,
+              "ci95": [
+                366.3155,
+                389.4385
+              ],
+              "n": 10,
+              "samples": [
+                450.042,
+                385.653,
+                367.304,
+                376.923,
+                399.295,
+                367.714,
+                364.917,
+                379.582,
+                360.074,
+                379.378
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 503.14200000000005,
+              "ci95": [
+                416.552,
+                551.9114999999999
+              ],
+              "n": 10,
+              "samples": [
+                476.507,
+                434.832,
+                416.483,
+                416.552,
+                404.819,
+                717.216,
+                551.536,
+                529.777,
+                542.669,
+                561.154
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1323.0465,
+              "ci95": [
+                1252.109,
+                1368.2694999999999
+              ],
+              "n": 10,
+              "samples": [
+                1262.818,
+                1252.109,
+                1217.46,
+                1304.698,
+                1244.402,
+                1570.235,
+                1389.823,
+                1341.395,
+                1346.716,
+                1356.879
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 306.72749999999996,
+              "ci95": [
+                237.01850000000002,
+                354.896
+              ],
+              "n": 10,
+              "samples": [
+                273.853,
+                243.539,
+                224.558,
+                249.479,
+                221.282,
+                354.896,
+                380.226,
+                349.161,
+                357.15,
+                339.602
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 287.5425,
+              "ci95": [
+                229.303,
+                352.028
+              ],
+              "n": 10,
+              "samples": [
+                245.997,
+                221.964,
+                235.072,
+                236.642,
+                217.322,
+                354.486,
+                360.768,
+                349.57,
+                351.482,
+                329.088
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 475,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 393.3605,
+              "ci95": [
+                382.34400000000005,
+                405.706
+              ],
+              "n": 10,
+              "samples": [
+                406.047,
+                398.339,
+                377.809,
+                382.379,
+                405.706,
+                383.742,
+                397.589,
+                426.237,
+                380.946,
+                389.132
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 367.44100000000003,
+              "ci95": [
+                357.82349999999997,
+                389.6435
+              ],
+              "n": 10,
+              "samples": [
+                388.927,
+                355.777,
+                359.87,
+                370.511,
+                353.458,
+                382.311,
+                441.721,
+                396.976,
+                358.232,
+                364.371
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 483.12299999999993,
+              "ci95": [
+                411.6065,
+                550.31
+              ],
+              "n": 10,
+              "samples": [
+                437.287,
+                415.869,
+                420.78,
+                400.182,
+                402.433,
+                717.967,
+                552.355,
+                550.31,
+                529.437,
+                528.959
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1314.9985,
+              "ci95": [
+                1204.977,
+                1468.7404999999999
+              ],
+              "n": 10,
+              "samples": [
+                1232.329,
+                1204.977,
+                1215.277,
+                1198.771,
+                1178.717,
+                1546.227,
+                1519.693,
+                1419.631,
+                1417.788,
+                1397.668
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 290.888,
+              "ci95": [
+                230.498,
+                360.699
+              ],
+              "n": 10,
+              "samples": [
+                236.643,
+                235.209,
+                227.288,
+                230.498,
+                221.759,
+                360.699,
+                406.649,
+                364.59,
+                358.515,
+                345.133
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 280.749,
+              "ci95": [
+                220.837,
+                353.79352499999914
+              ],
+              "n": 10,
+              "samples": [
+                224.831,
+                216.843,
+                226.197,
+                221.486,
+                200.184,
+                353.599,
+                372.17,
+                373.262,
+                335.301,
+                339.943
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 477,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 394.00800000000004,
+              "ci95": [
+                379.6165,
+                405.023
+              ],
+              "n": 10,
+              "samples": [
+                375.013,
+                380.674,
+                395.952,
+                384.22,
+                397.521,
+                407.479,
+                421.189,
+                405.023,
+                370.374,
+                392.064
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 368.12350000000004,
+              "ci95": [
+                362.5985,
+                373.068
+              ],
+              "n": 10,
+              "samples": [
+                371.329,
+                363.553,
+                360.144,
+                368.26,
+                420.645,
+                359.938,
+                377.126,
+                367.987,
+                369.01,
+                365.053
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 529.437,
+              "ci95": [
+                402.023,
+                565.5535
+              ],
+              "n": 10,
+              "samples": [
+                399.567,
+                401.204,
+                402.023,
+                701.392,
+                572.954,
+                558.153,
+                526.504,
+                560.949,
+                510.338,
+                532.37
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1387.334,
+              "ci95": [
+                1213.025,
+                1465.604
+              ],
+              "n": 10,
+              "samples": [
+                1209.82,
+                1213.025,
+                1204.978,
+                1539.95,
+                1465.604,
+                1472.355,
+                1407.354,
+                1367.314,
+                1412.06,
+                1341.19
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 347.89750000000004,
+              "ci95": [
+                235.687,
+                373.057
+              ],
+              "n": 10,
+              "samples": [
+                220.256,
+                235.687,
+                208.65,
+                373.33,
+                373.057,
+                403.371,
+                369.985,
+                346.499,
+                348.546,
+                347.249
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 336.086,
+              "ci95": [
+                219.642,
+                372.989
+              ],
+              "n": 10,
+              "samples": [
+                214.385,
+                217.321,
+                219.642,
+                343.152,
+                372.989,
+                374.969,
+                379.68,
+                329.02,
+                366.981,
+                317.959
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 478,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 384.3905,
+              "ci95": [
+                372.692,
+                416.6875
+              ],
+              "n": 10,
+              "samples": [
+                384.356,
+                371.329,
+                383.675,
+                370.92,
+                395.952,
+                372.692,
+                384.425,
+                493.286,
+                437.764,
+                395.611
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 362.5635,
+              "ci95": [
+                356.664,
+                397.316
+              ],
+              "n": 10,
+              "samples": [
+                361.848,
+                362.938,
+                354.55,
+                353.391,
+                362.189,
+                373.921,
+                356.664,
+                440.425,
+                397.316,
+                414.982
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 540.3845,
+              "ci95": [
+                474.9385,
+                577.319
+              ],
+              "n": 10,
+              "samples": [
+                418.462,
+                391.655,
+                716.396,
+                534.553,
+                554.947,
+                519.615,
+                531.415,
+                599.691,
+                566.61,
+                546.216
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1367.042,
+              "ci95": [
+                1276.1185,
+                1467.922
+              ],
+              "n": 10,
+              "samples": [
+                1199.315,
+                1180.831,
+                1536.131,
+                1352.922,
+                1377.683,
+                1356.401,
+                1467.922,
+                1487.907,
+                1397.462,
+                1346.783
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 351.4145,
+              "ci95": [
+                282.8655,
+                362.33799999999997
+              ],
+              "n": 10,
+              "samples": [
+                223.398,
+                211.791,
+                350.8,
+                366.435,
+                352.029,
+                359.13,
+                398.934,
+                358.241,
+                342.333,
+                330.044
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 341.514,
+              "ci95": [
+                283.344,
+                366.844
+              ],
+              "n": 10,
+              "samples": [
+                229.27,
+                202.3,
+                356.603,
+                341.582,
+                337.418,
+                361.997,
+                503.737,
+                377.085,
+                326.698,
+                341.446
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 476,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 377.1945,
+              "ci95": [
+                369.146,
+                394.1785
+              ],
+              "n": 10,
+              "samples": [
+                399.908,
+                373.443,
+                369.146,
+                409.867,
+                364.371,
+                388.449,
+                380.946,
+                390.974,
+                369.146,
+                368.941
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 373.4085,
+              "ci95": [
+                368.3965,
+                384.664
+              ],
+              "n": 10,
+              "samples": [
+                423.713,
+                371.67,
+                382.311,
+                373.579,
+                373.238,
+                376.786,
+                392.542,
+                364.85,
+                371.943,
+                361.303
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 525.0035,
+              "ci95": [
+                419.348,
+                544.989
+              ],
+              "n": 10,
+              "samples": [
+                457.613,
+                397.452,
+                398.545,
+                419.348,
+                706.303,
+                544.989,
+                546.762,
+                532.507,
+                521.661,
+                528.346
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1356.3665,
+              "ci95": [
+                1228.851,
+                1394.734
+              ],
+              "n": 10,
+              "samples": [
+                1240.582,
+                1228.851,
+                1218.142,
+                1191.198,
+                1565.188,
+                1371.611,
+                1396.439,
+                1384.093,
+                1341.122,
+                1394.734
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 345.6445,
+              "ci95": [
+                225.65,
+                364.045
+              ],
+              "n": 10,
+              "samples": [
+                233.57,
+                223.193,
+                225.65,
+                218.96,
+                368.961,
+                353.326,
+                364.045,
+                348.956,
+                342.333,
+                389.853
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 336.7695,
+              "ci95": [
+                224.763,
+                342.98199999999997
+              ],
+              "n": 10,
+              "samples": [
+                234.731,
+                215.409,
+                224.763,
+                202.369,
+                342.196,
+                341.65,
+                337.76,
+                335.779,
+                351.005,
+                344.314
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 480,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 408.776,
+              "ci95": [
+                403.864,
+                414.8125
+              ],
+              "n": 10,
+              "samples": [
+                414.301,
+                401.818,
+                407.957,
+                407.479,
+                411.504,
+                409.595,
+                403.592,
+                423.986,
+                420.03,
+                403.864
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 364.406,
+              "ci95": [
+                362.6665,
+                375.012
+              ],
+              "n": 10,
+              "samples": [
+                362.871,
+                367.577,
+                376.854,
+                364.1,
+                361.438,
+                375.012,
+                359.528,
+                364.712,
+                379.104,
+                363.895
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 516.989,
+              "ci95": [
+                506.8595,
+                529.4369999999999
+              ],
+              "n": 10,
+              "samples": [
+                702.482,
+                537.963,
+                516.136,
+                527.459,
+                520.911,
+                511.089,
+                501.335,
+                517.842,
+                496.901,
+                512.384
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1341.838,
+              "ci95": [
+                1329.8,
+                1411.24
+              ],
+              "n": 10,
+              "samples": [
+                1533.539,
+                1329.186,
+                1329.8,
+                1335.393,
+                1339.28,
+                1344.396,
+                1411.24,
+                1425.429,
+                1388.868,
+                1295.695
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 348.683,
+              "ci95": [
+                337.554,
+                360.222
+              ],
+              "n": 10,
+              "samples": [
+                360.222,
+                364.045,
+                348.274,
+                353.462,
+                343.221,
+                337.075,
+                360.358,
+                349.092,
+                336.803,
+                337.554
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 336.32500000000005,
+              "ci95": [
+                332.6725,
+                338.92
+              ],
+              "n": 10,
+              "samples": [
+                354.486,
+                338.92,
+                335.915,
+                332.912,
+                329.703,
+                337.827,
+                338.987,
+                335.642,
+                336.735,
+                312.02
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 481,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 378.9,
+              "ci95": [
+                374.33000000000004,
+                384.2885
+              ],
+              "n": 10,
+              "samples": [
+                381.015,
+                366.213,
+                387.562,
+                379.514,
+                381.628,
+                371.261,
+                377.399,
+                378.286,
+                377.263,
+                415.188
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 372.1475,
+              "ci95": [
+                362.939,
+                400.658
+              ],
+              "n": 10,
+              "samples": [
+                362.939,
+                369.215,
+                366.69,
+                362.257,
+                400.658,
+                352.025,
+                379.036,
+                375.08,
+                427.055,
+                402.705
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 521.9005,
+              "ci95": [
+                511.293,
+                531.21
+              ],
+              "n": 10,
+              "samples": [
+                528.891,
+                511.293,
+                558.698,
+                522.479,
+                516.137,
+                521.935,
+                521.866,
+                497.651,
+                539.941,
+                508.156
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1351.5585,
+              "ci95": [
+                1340.099,
+                1382.047
+              ],
+              "n": 10,
+              "samples": [
+                1366.905,
+                1382.048,
+                1341.122,
+                1352.309,
+                1343.646,
+                1320.796,
+                1350.808,
+                1382.047,
+                1433.477,
+                1336.552
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 341.07,
+              "ci95": [
+                331.956,
+                358.412
+              ],
+              "n": 10,
+              "samples": [
+                354.828,
+                361.996,
+                356.944,
+                340.353,
+                333.049,
+                341.787,
+                330.932,
+                331.956,
+                386.644,
+                325.879
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 331.92150000000004,
+              "ci95": [
+                323.558,
+                343.5625
+              ],
+              "n": 10,
+              "samples": [
+                336.871,
+                381.728,
+                334.072,
+                329.771,
+                335.028,
+                315.433,
+                322.534,
+                326.015,
+                352.097,
+                323.558
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 472,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 422.452,
+              "ci95": [
+                411.026,
+                445.2335
+              ],
+              "n": 10,
+              "samples": [
+                557.13,
+                411.026,
+                420.576,
+                423.509,
+                396.906,
+                421.395,
+                402.978,
+                461.092,
+                430.397,
+                429.375
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 376.342,
+              "ci95": [
+                370.5105,
+                388.3125
+              ],
+              "n": 10,
+              "samples": [
+                418.394,
+                373.103,
+                385.653,
+                366.213,
+                374.808,
+                360.553,
+                375.967,
+                391.041,
+                385.584,
+                376.717
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 439.50350000000003,
+              "ci95": [
+                421.804,
+                486.193
+              ],
+              "n": 10,
+              "samples": [
+                458.567,
+                414.847,
+                421.804,
+                434.968,
+                435.172,
+                443.835,
+                420.575,
+                447.519,
+                736.451,
+                524.867
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1263.2959999999998,
+              "ci95": [
+                1222.473,
+                1367.314
+              ],
+              "n": 10,
+              "samples": [
+                1262.273,
+                1218.142,
+                1226.804,
+                1203.886,
+                1336.961,
+                1226.6,
+                1367.314,
+                1264.319,
+                1600.656,
+                1424.541
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 244.6315,
+              "ci95": [
+                230.9075,
+                308.2305
+              ],
+              "n": 10,
+              "samples": [
+                248.319,
+                230.976,
+                240.944,
+                238.213,
+                252.346,
+                223.602,
+                252.55,
+                215.545,
+                379.953,
+                368.142
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 231.625,
+              "ci95": [
+                225.651,
+                295.5645
+              ],
+              "n": 10,
+              "samples": [
+                238.691,
+                225.651,
+                224.354,
+                230.362,
+                228.928,
+                225.172,
+                255.965,
+                232.888,
+                352.438,
+                364.249
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "snapshot",
+            "unit": "ns/instance",
+            "method": {
+              "warmup_s": 2,
+              "warmup_iterations": 480,
+              "reps": 10
+            },
+            "record_bytes": 4612,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "snapshot_copy": {
+              "median": 367.236,
+              "ci95": [
+                364.16700000000003,
+                394.521
+              ],
+              "n": 10,
+              "samples": [
+                367.372,
+                361.098,
+                396.021,
+                369.691,
+                395.406,
+                367.1,
+                362.599,
+                394.521,
+                365.735,
+                364.304
+              ]
+            },
+            "snapshot_all_copy": {
+              "median": 352.7755,
+              "ci95": [
+                349.229,
+                366.622
+              ],
+              "n": 10,
+              "samples": [
+                346.91,
+                351.548,
+                356.596,
+                465.253,
+                339.407,
+                366.622,
+                351.821,
+                349.229,
+                367.577,
+                353.73
+              ]
+            },
+            "restore_with_reobserve": {
+              "median": 529.164,
+              "ci95": [
+                512.248,
+                571.658
+              ],
+              "n": 10,
+              "samples": [
+                711.35,
+                526.026,
+                545.943,
+                571.658,
+                517.432,
+                532.302,
+                513.135,
+                507.064,
+                498.061,
+                573.636
+              ]
+            },
+            "import_with_validation_and_reobserve": {
+              "median": 1368.542,
+              "ci95": [
+                1334.369,
+                1430.8515000000002
+              ],
+              "n": 10,
+              "samples": [
+                1589.948,
+                1334.369,
+                1345.351,
+                1470.515,
+                1424.064,
+                1330.209,
+                1329.049,
+                1390.232,
+                1346.852,
+                1391.188
+              ]
+            },
+            "fork_with_reobserve": {
+              "median": 346.5665,
+              "ci95": [
+                339.909,
+                362.7135
+              ],
+              "n": 10,
+              "samples": [
+                352.165,
+                357.832,
+                373.262,
+                380.908,
+                341.787,
+                332.843,
+                342.265,
+                345.611,
+                337.553,
+                347.522
+              ]
+            },
+            "fork_branched_with_reobserve": {
+              "median": 343.597,
+              "ci95": [
+                337.3145,
+                355.169
+              ],
+              "n": 10,
+              "samples": [
+                355.169,
+                364.66,
+                352.233,
+                356.399,
+                341.718,
+                332.911,
+                343.221,
+                337.759,
+                343.973,
+                318.574
+              ]
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          }
+        ]
+      },
+      "rust/jobshop/n1024/memory": {
+        "config": {
+          "name": "rust/jobshop/n1024/memory",
+          "kind": "rust",
+          "flagship": "tessera/JobShop-v1",
+          "illegal_action_noops": true,
+          "metric": "memory",
+          "env": "jobshop",
+          "num_envs": 1024
+        },
+        "metric": "memory",
+        "record_bytes_per_instance": 4612,
+        "mask_bytes_per_step": 6144,
+        "output_storage_bytes": 220160,
+        "chunk_size": 64,
+        "options": {
+          "seed": 1,
+          "auto_reset": "next_step",
+          "max_episode_steps": 500,
+          "action_batches": 64
+        },
+        "plan_fingerprint": "b088488601ee0bb5",
+        "profile": "release",
+        "pinning": {
+          "worker_cpu_set": "engine default",
+          "process_affinity": "2"
+        },
+        "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "action_policy": "planned",
+        "statistic": "median and 95% bootstrap CI over 10 process medians",
+        "runs": [
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          },
+          {
+            "metric": "memory",
+            "record_bytes_per_instance": 4612,
+            "mask_bytes_per_step": 6144,
+            "output_storage_bytes": 220160,
+            "chunk_size": 64,
+            "options": {
+              "seed": 1,
+              "auto_reset": "next_step",
+              "max_episode_steps": 500,
+              "action_batches": 64
+            },
+            "plan_fingerprint": "b088488601ee0bb5",
+            "profile": "release",
+            "pinning": {
+              "worker_cpu_set": "engine default",
+              "process_affinity": "2"
+            },
+            "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+            "action_policy": "planned"
+          }
+        ]
+      }
+    },
+    "skipped": {},
+    "derived": {
+      "scaling_efficiency/jobshop/sync4/n1024": {
+        "value": 0.6611888872883764,
+        "ci95": [
+          0.6563875954787335,
+          0.6660878572246448
+        ],
+        "method": "independent bootstrap of each operand's median",
+        "from": [
+          "rust/jobshop/sync4/n1024",
+          "rust/jobshop/inline/n1024"
+        ],
+        "same_work": false,
+        "note": "efficiency vs k\u00d7Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
+      },
+      "scaling_efficiency/jobshop/syncfull/n1024": {
+        "value": 0.6620347925868766,
+        "ci95": [
+          0.6568587106983004,
+          0.6684587265222706
+        ],
+        "method": "independent bootstrap of each operand's median",
+        "from": [
+          "rust/jobshop/syncfull/n1024",
+          "rust/jobshop/inline/n1024"
+        ],
+        "same_work": false,
+        "note": "efficiency vs k\u00d7Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
+      },
+      "rust/jobshop/n1024/snapshot/copy_ns_per_kib": {
+        "value": 82.18099566348656,
+        "ci95": [
+          80.90887771032091,
+          83.5590216825672
+        ],
+        "budget_ns_per_kib": 1000.0,
+        "from": [
+          "rust/jobshop/n1024/snapshot"
+        ]
+      }
+    },
+    "load_rule": {
+      "max_load5": 2.0,
+      "load_wait_s": 7200.0,
+      "poll_s": 30,
+      "waited_s": 390.0,
+      "runs": [
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 0,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.3681640625,
+            "load5": 1.783203125
+          },
+          "after": {
+            "load1": 2.17333984375,
+            "load5": 1.94140625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 0,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 2.17333984375,
+            "load5": 1.94140625
+          },
+          "after": {
+            "load1": 2.17333984375,
+            "load5": 1.94140625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 0,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 2.17333984375,
+            "load5": 1.94140625
+          },
+          "after": {
+            "load1": 2.17333984375,
+            "load5": 1.94140625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 0,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 2.17333984375,
+            "load5": 1.94140625
+          },
+          "after": {
+            "load1": 1.99267578125,
+            "load5": 1.90966796875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 0,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.99267578125,
+            "load5": 1.90966796875
+          },
+          "after": {
+            "load1": 2.57958984375,
+            "load5": 2.04541015625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 1,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.56201171875,
+            "load5": 1.8486328125
+          },
+          "after": {
+            "load1": 1.56201171875,
+            "load5": 1.8486328125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 1,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.56201171875,
+            "load5": 1.8486328125
+          },
+          "after": {
+            "load1": 2.01708984375,
+            "load5": 1.9365234375
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 1,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 2.01708984375,
+            "load5": 1.9365234375
+          },
+          "after": {
+            "load1": 2.53076171875,
+            "load5": 2.0546875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 1,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.6123046875,
+            "load5": 1.87353515625
+          },
+          "after": {
+            "load1": 1.517578125,
+            "load5": 1.84423828125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 1,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.517578125,
+            "load5": 1.84423828125
+          },
+          "after": {
+            "load1": 1.517578125,
+            "load5": 1.84423828125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 2,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.517578125,
+            "load5": 1.84423828125
+          },
+          "after": {
+            "load1": 1.40234375,
+            "load5": 1.80224609375
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 2,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.40234375,
+            "load5": 1.80224609375
+          },
+          "after": {
+            "load1": 1.8759765625,
+            "load5": 1.89111328125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 2,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.8759765625,
+            "load5": 1.89111328125
+          },
+          "after": {
+            "load1": 1.8056640625,
+            "load5": 1.8759765625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 2,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.8056640625,
+            "load5": 1.8759765625
+          },
+          "after": {
+            "load1": 1.8056640625,
+            "load5": 1.8759765625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 2,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.8056640625,
+            "load5": 1.8759765625
+          },
+          "after": {
+            "load1": 2.076171875,
+            "load5": 1.9306640625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 3,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 2.076171875,
+            "load5": 1.9306640625
+          },
+          "after": {
+            "load1": 2.076171875,
+            "load5": 1.9306640625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 3,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 2.076171875,
+            "load5": 1.9306640625
+          },
+          "after": {
+            "load1": 2.52099609375,
+            "load5": 2.03369140625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 3,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 2.04443359375,
+            "load5": 1.9541015625
+          },
+          "after": {
+            "load1": 1.9638671875,
+            "load5": 1.939453125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 3,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.9638671875,
+            "load5": 1.939453125
+          },
+          "after": {
+            "load1": 2.78466796875,
+            "load5": 2.123046875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 3,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.9326171875,
+            "load5": 1.9814453125
+          },
+          "after": {
+            "load1": 1.9326171875,
+            "load5": 1.9814453125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 4,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.9326171875,
+            "load5": 1.9814453125
+          },
+          "after": {
+            "load1": 1.9326171875,
+            "load5": 1.9814453125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 4,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.9326171875,
+            "load5": 1.9814453125
+          },
+          "after": {
+            "load1": 2.23779296875,
+            "load5": 2.04736328125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 4,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.6240234375,
+            "load5": 1.9140625
+          },
+          "after": {
+            "load1": 2.29736328125,
+            "load5": 2.048828125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 4,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.58642578125,
+            "load5": 1.89892578125
+          },
+          "after": {
+            "load1": 1.61962890625,
+            "load5": 1.90087890625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 4,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.61962890625,
+            "load5": 1.90087890625
+          },
+          "after": {
+            "load1": 1.6787109375,
+            "load5": 1.90478515625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 5,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.6787109375,
+            "load5": 1.90478515625
+          },
+          "after": {
+            "load1": 1.6787109375,
+            "load5": 1.90478515625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 5,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.6787109375,
+            "load5": 1.90478515625
+          },
+          "after": {
+            "load1": 1.75048828125,
+            "load5": 1.91064453125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 5,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.75048828125,
+            "load5": 1.91064453125
+          },
+          "after": {
+            "load1": 1.75048828125,
+            "load5": 1.91064453125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 5,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.75048828125,
+            "load5": 1.91064453125
+          },
+          "after": {
+            "load1": 2.32421875,
+            "load5": 2.029296875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 5,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.8017578125,
+            "load5": 1.9296875
+          },
+          "after": {
+            "load1": 2.59130859375,
+            "load5": 2.09765625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 6,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.951171875,
+            "load5": 1.99072265625
+          },
+          "after": {
+            "load1": 2.34033203125,
+            "load5": 2.07373046875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 6,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.60595703125,
+            "load5": 1.92138671875
+          },
+          "after": {
+            "load1": 1.60595703125,
+            "load5": 1.92138671875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 6,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.60595703125,
+            "load5": 1.92138671875
+          },
+          "after": {
+            "load1": 1.6376953125,
+            "load5": 1.9228515625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 6,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.6376953125,
+            "load5": 1.9228515625
+          },
+          "after": {
+            "load1": 1.69970703125,
+            "load5": 1.92578125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 6,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.69970703125,
+            "load5": 1.92578125
+          },
+          "after": {
+            "load1": 2.43115234375,
+            "load5": 2.0771484375
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 7,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.6826171875,
+            "load5": 1.92626953125
+          },
+          "after": {
+            "load1": 1.6826171875,
+            "load5": 1.92626953125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 7,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.6826171875,
+            "load5": 1.92626953125
+          },
+          "after": {
+            "load1": 2.03955078125,
+            "load5": 1.9951171875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 7,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 2.03955078125,
+            "load5": 1.9951171875
+          },
+          "after": {
+            "load1": 1.80859375,
+            "load5": 1.94580078125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 7,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.80859375,
+            "load5": 1.94580078125
+          },
+          "after": {
+            "load1": 2.22607421875,
+            "load5": 2.0302734375
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 7,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.578125,
+            "load5": 1.89697265625
+          },
+          "after": {
+            "load1": 1.578125,
+            "load5": 1.89697265625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 8,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.578125,
+            "load5": 1.89697265625
+          },
+          "after": {
+            "load1": 1.578125,
+            "load5": 1.89697265625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 8,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.578125,
+            "load5": 1.89697265625
+          },
+          "after": {
+            "load1": 1.53173828125,
+            "load5": 1.8818359375
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 8,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.53173828125,
+            "load5": 1.8818359375
+          },
+          "after": {
+            "load1": 1.99169921875,
+            "load5": 1.96875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 8,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.99169921875,
+            "load5": 1.96875
+          },
+          "after": {
+            "load1": 2.4482421875,
+            "load5": 2.06884765625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 8,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.5400390625,
+            "load5": 1.884765625
+          },
+          "after": {
+            "load1": 1.419921875,
+            "load5": 1.84033203125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/memory",
+          "run": 9,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.419921875,
+            "load5": 1.84033203125
+          },
+          "after": {
+            "load1": 1.419921875,
+            "load5": 1.84033203125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/n1024/snapshot",
+          "run": 9,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.419921875,
+            "load5": 1.84033203125
+          },
+          "after": {
+            "load1": 1.419921875,
+            "load5": 1.84033203125
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/syncfull/n1024",
+          "run": 9,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 1.419921875,
+            "load5": 1.84033203125
+          },
+          "after": {
+            "load1": 2.14599609375,
+            "load5": 1.97998046875
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/sync4/n1024",
+          "run": 9,
+          "k_run": 4,
+          "gate_bound": 2.0,
+          "void_bound": 6.0,
+          "before": {
+            "load1": 2.14599609375,
+            "load5": 1.97998046875
+          },
+          "after": {
+            "load1": 2.51171875,
+            "load5": 2.0634765625
+          },
+          "void": false
+        },
+        {
+          "config": "rust/jobshop/inline/n1024",
+          "run": 9,
+          "k_run": 1,
+          "gate_bound": 2.0,
+          "void_bound": 3.0,
+          "before": {
+            "load1": 1.521484375,
+            "load5": 1.865234375
+          },
+          "after": {
+            "load1": 1.44091796875,
+            "load5": 1.83642578125
+          },
+          "void": false
+        }
+      ],
+      "load_void": false,
+      "void_runs": []
+    },
+    "load_void": false,
+    "containers": {
+      "start": {
+        "count": 4,
+        "ours": [],
+        "others": [
+          "17d11d8df4f6",
+          "2fa13e32d30f",
+          "55d20b8ec119",
+          "977123132839"
+        ]
+      },
+      "end": {
+        "count": 4,
+        "ours": [],
+        "others": [
+          "17d11d8df4f6",
+          "2fa13e32d30f",
+          "55d20b8ec119",
+          "977123132839"
+        ]
+      }
+    },
+    "valid_for_claims": false,
+    "claim_check": {
+      "valid": false,
+      "reasons": [
+        "machine status is 'candidate', not 'reference'",
+        "no qualification record (an exclusive window cannot be verified automatically)"
+      ]
+    }
+  },
+  "loads": {
+    "start": [
+      1.3681640625,
+      1.783203125,
+      1.7802734375
+    ],
+    "end": [
+      1.44091796875,
+      1.83642578125,
+      1.86767578125
+    ],
+    "runs": [
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 0,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.3681640625,
+          "load5": 1.783203125
+        },
+        "after": {
+          "load1": 2.17333984375,
+          "load5": 1.94140625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 0,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 2.17333984375,
+          "load5": 1.94140625
+        },
+        "after": {
+          "load1": 2.17333984375,
+          "load5": 1.94140625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 0,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 2.17333984375,
+          "load5": 1.94140625
+        },
+        "after": {
+          "load1": 2.17333984375,
+          "load5": 1.94140625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 0,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 2.17333984375,
+          "load5": 1.94140625
+        },
+        "after": {
+          "load1": 1.99267578125,
+          "load5": 1.90966796875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 0,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.99267578125,
+          "load5": 1.90966796875
+        },
+        "after": {
+          "load1": 2.57958984375,
+          "load5": 2.04541015625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 1,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.56201171875,
+          "load5": 1.8486328125
+        },
+        "after": {
+          "load1": 1.56201171875,
+          "load5": 1.8486328125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 1,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.56201171875,
+          "load5": 1.8486328125
+        },
+        "after": {
+          "load1": 2.01708984375,
+          "load5": 1.9365234375
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 1,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 2.01708984375,
+          "load5": 1.9365234375
+        },
+        "after": {
+          "load1": 2.53076171875,
+          "load5": 2.0546875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 1,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.6123046875,
+          "load5": 1.87353515625
+        },
+        "after": {
+          "load1": 1.517578125,
+          "load5": 1.84423828125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 1,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.517578125,
+          "load5": 1.84423828125
+        },
+        "after": {
+          "load1": 1.517578125,
+          "load5": 1.84423828125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 2,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.517578125,
+          "load5": 1.84423828125
+        },
+        "after": {
+          "load1": 1.40234375,
+          "load5": 1.80224609375
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 2,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.40234375,
+          "load5": 1.80224609375
+        },
+        "after": {
+          "load1": 1.8759765625,
+          "load5": 1.89111328125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 2,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.8759765625,
+          "load5": 1.89111328125
+        },
+        "after": {
+          "load1": 1.8056640625,
+          "load5": 1.8759765625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 2,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.8056640625,
+          "load5": 1.8759765625
+        },
+        "after": {
+          "load1": 1.8056640625,
+          "load5": 1.8759765625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 2,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.8056640625,
+          "load5": 1.8759765625
+        },
+        "after": {
+          "load1": 2.076171875,
+          "load5": 1.9306640625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 3,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 2.076171875,
+          "load5": 1.9306640625
+        },
+        "after": {
+          "load1": 2.076171875,
+          "load5": 1.9306640625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 3,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 2.076171875,
+          "load5": 1.9306640625
+        },
+        "after": {
+          "load1": 2.52099609375,
+          "load5": 2.03369140625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 3,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 2.04443359375,
+          "load5": 1.9541015625
+        },
+        "after": {
+          "load1": 1.9638671875,
+          "load5": 1.939453125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 3,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.9638671875,
+          "load5": 1.939453125
+        },
+        "after": {
+          "load1": 2.78466796875,
+          "load5": 2.123046875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 3,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.9326171875,
+          "load5": 1.9814453125
+        },
+        "after": {
+          "load1": 1.9326171875,
+          "load5": 1.9814453125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 4,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.9326171875,
+          "load5": 1.9814453125
+        },
+        "after": {
+          "load1": 1.9326171875,
+          "load5": 1.9814453125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 4,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.9326171875,
+          "load5": 1.9814453125
+        },
+        "after": {
+          "load1": 2.23779296875,
+          "load5": 2.04736328125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 4,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.6240234375,
+          "load5": 1.9140625
+        },
+        "after": {
+          "load1": 2.29736328125,
+          "load5": 2.048828125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 4,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.58642578125,
+          "load5": 1.89892578125
+        },
+        "after": {
+          "load1": 1.61962890625,
+          "load5": 1.90087890625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 4,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.61962890625,
+          "load5": 1.90087890625
+        },
+        "after": {
+          "load1": 1.6787109375,
+          "load5": 1.90478515625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 5,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.6787109375,
+          "load5": 1.90478515625
+        },
+        "after": {
+          "load1": 1.6787109375,
+          "load5": 1.90478515625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 5,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.6787109375,
+          "load5": 1.90478515625
+        },
+        "after": {
+          "load1": 1.75048828125,
+          "load5": 1.91064453125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 5,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.75048828125,
+          "load5": 1.91064453125
+        },
+        "after": {
+          "load1": 1.75048828125,
+          "load5": 1.91064453125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 5,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.75048828125,
+          "load5": 1.91064453125
+        },
+        "after": {
+          "load1": 2.32421875,
+          "load5": 2.029296875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 5,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.8017578125,
+          "load5": 1.9296875
+        },
+        "after": {
+          "load1": 2.59130859375,
+          "load5": 2.09765625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 6,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.951171875,
+          "load5": 1.99072265625
+        },
+        "after": {
+          "load1": 2.34033203125,
+          "load5": 2.07373046875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 6,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.60595703125,
+          "load5": 1.92138671875
+        },
+        "after": {
+          "load1": 1.60595703125,
+          "load5": 1.92138671875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 6,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.60595703125,
+          "load5": 1.92138671875
+        },
+        "after": {
+          "load1": 1.6376953125,
+          "load5": 1.9228515625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 6,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.6376953125,
+          "load5": 1.9228515625
+        },
+        "after": {
+          "load1": 1.69970703125,
+          "load5": 1.92578125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 6,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.69970703125,
+          "load5": 1.92578125
+        },
+        "after": {
+          "load1": 2.43115234375,
+          "load5": 2.0771484375
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 7,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.6826171875,
+          "load5": 1.92626953125
+        },
+        "after": {
+          "load1": 1.6826171875,
+          "load5": 1.92626953125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 7,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.6826171875,
+          "load5": 1.92626953125
+        },
+        "after": {
+          "load1": 2.03955078125,
+          "load5": 1.9951171875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 7,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 2.03955078125,
+          "load5": 1.9951171875
+        },
+        "after": {
+          "load1": 1.80859375,
+          "load5": 1.94580078125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 7,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.80859375,
+          "load5": 1.94580078125
+        },
+        "after": {
+          "load1": 2.22607421875,
+          "load5": 2.0302734375
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 7,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.578125,
+          "load5": 1.89697265625
+        },
+        "after": {
+          "load1": 1.578125,
+          "load5": 1.89697265625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 8,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.578125,
+          "load5": 1.89697265625
+        },
+        "after": {
+          "load1": 1.578125,
+          "load5": 1.89697265625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 8,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.578125,
+          "load5": 1.89697265625
+        },
+        "after": {
+          "load1": 1.53173828125,
+          "load5": 1.8818359375
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 8,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.53173828125,
+          "load5": 1.8818359375
+        },
+        "after": {
+          "load1": 1.99169921875,
+          "load5": 1.96875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 8,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.99169921875,
+          "load5": 1.96875
+        },
+        "after": {
+          "load1": 2.4482421875,
+          "load5": 2.06884765625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 8,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.5400390625,
+          "load5": 1.884765625
+        },
+        "after": {
+          "load1": 1.419921875,
+          "load5": 1.84033203125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/memory",
+        "run": 9,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.419921875,
+          "load5": 1.84033203125
+        },
+        "after": {
+          "load1": 1.419921875,
+          "load5": 1.84033203125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/n1024/snapshot",
+        "run": 9,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.419921875,
+          "load5": 1.84033203125
+        },
+        "after": {
+          "load1": 1.419921875,
+          "load5": 1.84033203125
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/syncfull/n1024",
+        "run": 9,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 1.419921875,
+          "load5": 1.84033203125
+        },
+        "after": {
+          "load1": 2.14599609375,
+          "load5": 1.97998046875
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/sync4/n1024",
+        "run": 9,
+        "k_run": 4,
+        "gate_bound": 2.0,
+        "void_bound": 6.0,
+        "before": {
+          "load1": 2.14599609375,
+          "load5": 1.97998046875
+        },
+        "after": {
+          "load1": 2.51171875,
+          "load5": 2.0634765625
+        },
+        "void": false
+      },
+      {
+        "config": "rust/jobshop/inline/n1024",
+        "run": 9,
+        "k_run": 1,
+        "gate_bound": 2.0,
+        "void_bound": 3.0,
+        "before": {
+          "load1": 1.521484375,
+          "load5": 1.865234375
+        },
+        "after": {
+          "load1": 1.44091796875,
+          "load5": 1.83642578125
+        },
+        "void": false
+      }
+    ]
+  },
+  "containers": {
+    "start": {
+      "count": 4,
+      "ours": [],
+      "others": [
+        "17d11d8df4f6",
+        "2fa13e32d30f",
+        "55d20b8ec119",
+        "977123132839"
+      ]
+    },
+    "end": {
+      "count": 4,
+      "ours": [],
+      "others": [
+        "17d11d8df4f6",
+        "2fa13e32d30f",
+        "55d20b8ec119",
+        "977123132839"
+      ]
+    }
+  }
+}
