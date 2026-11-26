@@ -291,6 +291,13 @@ jobs:
           RUSTFLAGS: --cfg loom -D warnings
           LOOM_MAX_PREEMPTIONS: "3"
           CARGO_TARGET_DIR: target/loom
+      # The XLA FFI registry's model (ADR-0095 point 3, #738): steps, opens and
+      # closes. Its own cfg, so the engine's loom build is not mixed in.
+      - run: cargo test -p tessera-rl-pyffi --features pyo3/extension-module --lib --release --locked -- loom_model
+        env:
+          RUSTFLAGS: --cfg tessera_xla_loom -D warnings
+          LOOM_MAX_PREEMPTIONS: "3"
+          CARGO_TARGET_DIR: target/loom-xla
 
   msrv:
     runs-on: [self-hosted, linux-x64]
