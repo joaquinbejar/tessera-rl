@@ -40,7 +40,10 @@ def test_grid_lanes_outputs_equal_grid_on_the_same_actions(auto_reset, workers, 
     lanes, grid = pair(num_envs=20, seed=11, chunk_size=8, workers=workers, auto_reset=auto_reset, **cfg)
     same(lanes.reset(), grid.reset())
     rng = np.random.default_rng(3)
-    for _ in range(120):
+    for i in range(120):
+        if i == 60:
+            # A reseed of the whole pool mid-run (sync mode refuses ids).
+            same(lanes.reset(7), grid.reset(7))
         actions = rng.integers(0, 4, size=(20, 1), dtype=np.int32)
         same(lanes.step(actions), grid.step(actions))
     lanes.close()
