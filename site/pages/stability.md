@@ -16,8 +16,9 @@ Not tracked:
 
 - items hidden from the docs, and names starting with `_`;
 - test-only features;
-- the host-environment API (`HostEnvironment`, `register_host!` and their
-  types), whose place in the stable surface is still open;
+- the host-environment Rust API (`HostEnvironment`, `register_host!` and
+  their types), which stays outside the stable surface after 1.0 (see
+  "Host environments" below);
 - the tool, example and integration crates.
 
 The Python API of the `tessera_rl` package: the names in `tessera_rl.__all__`,
@@ -33,7 +34,7 @@ Not tracked in Python:
   `transforms` and `viewer`), whose place in the stable surface is still
   open;
 - the host-environment wrappers `tessera_rl.HostEnv` and
-  `tessera_rl.HostStep`, for the same open question as the Rust host API.
+  `tessera_rl.HostStep`, not tracked yet.
 
 ## How it is tracked
 
@@ -56,5 +57,36 @@ shows each API change.
 Each release checks what changed in the API since the previous one: `git
 diff <previous tag> -- api/tessera-rl.api api/tessera-rl-py.api`. A removed or changed line is a
 candidate breaking change, and the CHANGELOG names it. Before 1.0 such
-changes may ship in any release. What 1.0 will promise is still being
-decided; this page will state it then.
+changes may ship in any release. From 1.0, a breaking change to the stable
+surface ships only in a major release (ADR-0094 item 1), and the release
+checklist confirms it.
+
+## Deprecation
+
+From 1.0, a stable item is deprecated for at least one minor release before
+it is removed in the next major release (ADR-0094 item 5). In Rust it carries
+`#[deprecated(since, note)]`, and in Python it raises a `DeprecationWarning`;
+the note names the replacement. `EnvAssets`, superseded by `Asset<T>` config
+fields (#418), is the example. Deprecated environment ids follow ADR-0080.
+
+## Rust and Python versions
+
+The minimum supported Rust version is the workspace's `rust-version`,
+checked by CI's `msrv` job. From 1.0 it is at most 4 stable Rust releases
+behind the newest stable at the time of each minor release, and it is raised
+only in a minor release, with a CHANGELOG entry, never in a patch (ADR-0094
+item 6). The Python floor (CPython 3.11, abi3 wheels) is raised the same
+way: only in a minor release, with a CHANGELOG entry.
+
+## Host environments
+
+The host protocols that a host wheel speaks to `tessera_rl`, protocols 1 and
+2 (SPEC 14.4), are stable from 1.0: a host wheel built against a protocol
+works with every 1.x release that supports it, and 1.0 supports both
+(ADR-0094 items 3 and 4). The Rust host API (`HostEnvironment`, `HostPool`,
+`HostSnapshot`, `export_host_env!`) and the `tessera-rl-pyffi` crate are
+outside the stable surface: a minor release may change them, with a
+CHANGELOG entry, so a host crate that rebuilds against a newer Tessera may
+need source changes. `tessera_rl.jax.ffi_handle` is not affected by this.
+`cargo tessera new --kind env` scaffolds an environment on the stable
+surface; `--kind host` scaffolds a host environment.
