@@ -6,8 +6,10 @@
 //! and the walls, 255 where lit and 0 elsewhere.
 //!
 //! Every byte is lit by exactly one rule of its channel, so the observation
-//! is written sparsely: zero everything, then light only the agent, the
-//! goal, the border and the walls. That is O(size) writes for the open
+//! is written sparsely into rows that are already zero: the engine zeroes
+//! every observation row before `observe` (SPEC 10) and before
+//! `LaneEnvironment::observe_lanes` (`lane_env.rs`), so only the agent, the
+//! goal, the border and the walls are written. That is O(size) writes for the open
 //! layout instead of three writes per cell, with the same bytes as the
 //! cell-by-cell loop (the `tests` module keeps that loop as its reference).
 
@@ -18,18 +20,11 @@ use super::GridConfig;
 /// Where an observation is written: a leaf of the observation, or the raw
 /// bytes of one instance's leaf in a lane group.
 pub(crate) trait PixelSink {
-    /// Sets every byte to 0.
-    fn zero(&mut self);
     /// Sets byte `k` to 255; an index past the end writes nothing.
     fn lit(&mut self, k: usize);
 }
 
 impl PixelSink for LeafMut<'_, u8> {
-    #[inline]
-    fn zero(&mut self) {
-        self.fill(0);
-    }
-
     #[inline]
     fn lit(&mut self, k: usize) {
         self.set(k, 255);
@@ -37,11 +32,6 @@ impl PixelSink for LeafMut<'_, u8> {
 }
 
 impl PixelSink for [u8] {
-    #[inline]
-    fn zero(&mut self) {
-        self.fill(0);
-    }
-
     #[inline]
     fn lit(&mut self, k: usize) {
         if let Some(b) = self.get_mut(k) {
@@ -51,7 +41,8 @@ impl PixelSink for [u8] {
 }
 
 /// Writes the observation of an agent at `agent` and a goal at `goal`
-/// (column, row). A cell off the grid lights nothing: an agent that has
+/// (column, row) into `out`, which must be all zero (the engine's
+/// guarantee on entry to `observe` and `observe_lanes`). A cell off the grid lights nothing: an agent that has
 /// walked off is not drawn.
 #[inline]
 pub(crate) fn write<S: PixelSink + ?Sized>(
@@ -62,7 +53,6 @@ pub(crate) fn write<S: PixelSink + ?Sized>(
 ) {
     let n = usize::from(cfg.size);
     let cells = n * n;
-    out.zero();
     let cell = |(col, row): (i32, i32)| {
         let (col, row) = (usize::try_from(col).ok()?, usize::try_from(row).ok()?);
         (col < n && row < n).then_some(row * n + col)
@@ -129,7 +119,8 @@ mod tests {
     }
 
     fn sparse(cfg: &GridConfig, agent: (i32, i32), goal: (i32, i32)) -> Vec<u8> {
-        let mut out = vec![7u8; 3 * usize::from(cfg.size) * usize::from(cfg.size)];
+        // Zero, as the engine hands rows to `observe`.
+        let mut out = vec![0u8; 3 * usize::from(cfg.size) * usize::from(cfg.size)];
         write(cfg, agent, goal, out.as_mut_slice());
         out
     }
