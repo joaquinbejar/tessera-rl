@@ -136,9 +136,8 @@ mod tests {
                         // The observer at (cx, cy); the others spread, stacked and caught.
                         let s = state(
                             |i| match i {
-                                0 => [cx, cy],
+                                0 | 2 => [cx, cy],
                                 1 => [(cx + 1) % wi, cy],
-                                2 => [cx, cy],
                                 3 => [(cx + wi - 1) % wi, (cy + 1) % hi],
                                 _ => [(cx + 2) % wi, (cy + 2) % hi],
                             },
