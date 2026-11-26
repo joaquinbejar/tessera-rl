@@ -84,6 +84,10 @@ jobs:
         env:
           # A step's RUSTFLAGS replaces the job's, so -D warnings is restated.
           RUSTFLAGS: -C target-feature=+sse4.2,+avx2 -D warnings
+      # A lane-wise pool's live watch and NaN trap (#345): the Pipelined
+      # half token's raw column read, `HalfToken::state_at`.
+      - run: "cargo +nightly miri test -p tessera-rl-classic --test soa_checks --locked"
+      - run: "cargo +nightly miri test -p tessera-rl-classic --features tessera-rl-engine/debug-checks --test soa_checks --locked"
       # No public unsafe function in tessera-rl-pyffi, from rustdoc's JSON
       # (nightly only; #272 step 3). The source scan runs in the Python tests.
       - run: python3 scripts/check_pyffi_api.py
