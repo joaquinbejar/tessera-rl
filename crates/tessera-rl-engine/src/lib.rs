@@ -15,6 +15,7 @@ mod archive;
 mod buffer;
 #[cfg(test)]
 mod chunk_clear_tests;
+mod clear_rows;
 #[cfg(feature = "debug-checks")]
 pub mod debug;
 mod entry;
