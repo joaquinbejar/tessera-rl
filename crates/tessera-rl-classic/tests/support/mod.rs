@@ -422,12 +422,44 @@ where
         .collect()
 }
 
+/// Where a run's actions come from.
+#[derive(Debug)]
+pub enum Actions {
+    /// The generator, optionally writing every step's actions to a file
+    /// (little-endian `i32`, every step in order).
+    Generate(Option<std::fs::File>),
+    /// A recorded action stream, replayed step by step (the control run).
+    Replay(Vec<i32>),
+}
+
 /// Runs `scenario` on a pool from `build` (optionally with `workers`) and
-/// returns the fixture lines.
+/// returns the fixture lines. The actions come from the generator, or with
+/// `TESSERA_GOLDEN_CONTROL=<dir>` (and no `TESSERA_BLESS=1`) from the
+/// recorded `<dir>/<name>.actions`, for every worker count (the control
+/// run, ADR-0094 item 2).
 pub fn run<E, M>(
     scenario: &Scenario<E::Config>,
     build: impl Fn(E::Config, PoolOptions) -> EnvPool<E, M>,
     workers: Option<usize>,
+) -> Vec<String>
+where
+    E: GoldenEnv,
+    E::Config: CanonicalConfig + Clone,
+    M: MaskProvider<E>,
+{
+    let source = match control_replay_dir() {
+        Some(dir) => Actions::Replay(read_actions(&dir, scenario.name)),
+        None => Actions::Generate(action_dump(scenario.name, workers)),
+    };
+    run_with(scenario, build, workers, source)
+}
+
+/// [`run`] with an explicit action source.
+pub fn run_with<E, M>(
+    scenario: &Scenario<E::Config>,
+    build: impl Fn(E::Config, PoolOptions) -> EnvPool<E, M>,
+    workers: Option<usize>,
+    source: Actions,
 ) -> Vec<String>
 where
     E: GoldenEnv,
@@ -443,7 +475,11 @@ where
             .unwrap_or_else(|e| panic!("workers: {e}"));
     }
     let same_step = scenario.auto_reset == AutoReset::SameStep;
-    let mut dump = action_dump(scenario.name, workers);
+    let (mut dump, recorded) = match source {
+        Actions::Generate(file) => (file, None),
+        Actions::Replay(all) => (None, Some(all)),
+    };
+    let mut cursor = 0_usize;
     let mut lines = header::<E>(scenario);
     p.reset_all(Reseed::Keep)
         .unwrap_or_else(|e| panic!("reset: {e}"));
@@ -456,7 +492,21 @@ where
             )
             .unwrap_or_else(|e| panic!("reseed: {e}"));
         }
-        let acts = actions(&p, &scenario.cfg, scenario.seed, t);
+        let acts = match recorded.as_deref() {
+            None => actions(&p, &scenario.cfg, scenario.seed, t),
+            Some(all) => {
+                let width = p.outputs().unwrap().rewards().len();
+                let end = cursor
+                    .checked_add(width)
+                    .filter(|&e| e <= all.len())
+                    .unwrap_or_else(|| {
+                        panic!("{}: recorded actions end at step {t}", scenario.name)
+                    });
+                let step = all[cursor..end].to_vec();
+                cursor = end;
+                step
+            }
+        };
         if let Some(file) = dump.as_mut() {
             let bytes: Vec<u8> = acts.iter().flat_map(|a| a.to_le_bytes()).collect();
             file.write_all(&bytes)
@@ -473,6 +523,14 @@ where
         .map(|h| format!("{h:016x}"))
         .collect();
     lines.push(format!("final {}", finals.join(" ")));
+    if let Some(all) = recorded.as_deref() {
+        assert_eq!(
+            cursor,
+            all.len(),
+            "{}: recorded actions are longer than the run",
+            scenario.name
+        );
+    }
     lines
 }
 
@@ -492,6 +550,110 @@ fn action_dump(name: &str, workers: Option<usize>) -> Option<std::fs::File> {
         std::fs::File::create(dir.join(format!("{name}.actions")))
             .unwrap_or_else(|e| panic!("action dump: {e}")),
     )
+}
+
+/// `TESSERA_GOLDEN_CONTROL`, when this is a control run (not a bless).
+fn control_replay_dir() -> Option<PathBuf> {
+    if bless_requested() {
+        return None;
+    }
+    std::env::var_os("TESSERA_GOLDEN_CONTROL").map(PathBuf::from)
+}
+
+fn bless_requested() -> bool {
+    std::env::var_os("TESSERA_BLESS").is_some_and(|v| v == "1")
+}
+
+fn actions_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.actions"))
+}
+
+fn control_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.control"))
+}
+
+/// The recorded actions of `name` (little-endian `i32`).
+///
+/// # Panics
+///
+/// If the file is missing or not a whole number of `i32`s.
+#[must_use]
+pub fn read_actions(dir: &std::path::Path, name: &str) -> Vec<i32> {
+    let file = actions_path(dir, name);
+    let bytes = std::fs::read(&file).unwrap_or_else(|e| {
+        panic!(
+            "{name}: no recorded actions at {} ({e}); record them first with \
+             TESSERA_GOLDEN_ACTIONS=<dir>, before the generator change",
+            file.display()
+        )
+    });
+    assert!(
+        bytes.len().is_multiple_of(4),
+        "{name}: {} is not a whole number of i32",
+        file.display()
+    );
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_le_bytes(*c))
+        .collect()
+}
+
+/// A passed control run: the recorded actions reproduced the committed
+/// fixture. Both hashes are XXH3-64 ([`digest`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ControlMark {
+    /// The committed fixture's text.
+    pub fixture: u64,
+    /// The recorded actions file's bytes.
+    pub actions: u64,
+}
+
+impl ControlMark {
+    fn text(self) -> String {
+        format!(
+            "fixture={:016x}\nactions={:016x}\nreproduced\n",
+            self.fixture, self.actions
+        )
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        let lines: Vec<&str> = text.lines().collect();
+        if !lines.contains(&"reproduced") {
+            return None;
+        }
+        let hex = |key| u64::from_str_radix(value(&lines, key)?, 16).ok();
+        Some(Self {
+            fixture: hex("fixture")?,
+            actions: hex("actions")?,
+        })
+    }
+}
+
+/// Compares a control run's `lines` with the committed fixture text,
+/// ignoring only the `actions=` header line, which names the generator.
+///
+/// # Errors
+///
+/// The first divergence, as [`compare_text`]: the environment changed.
+pub fn control_compare(name: &str, committed: &str, lines: &[String]) -> Result<(), String> {
+    let keep = |l: &&str| !l.starts_with("actions=");
+    let committed = committed
+        .lines()
+        .filter(keep)
+        .fold(String::new(), |mut text, l| {
+            text.push_str(l);
+            text.push('\n');
+            text
+        });
+    let lines: Vec<String> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(keep)
+        .map(str::to_owned)
+        .collect();
+    compare_text(name, &committed, &lines)
 }
 
 fn step_line(t: u32, digests: &[u64]) -> String {
@@ -562,6 +724,46 @@ impl BlessReason {
     }
 }
 
+/// What the bless policy knows besides the two texts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Policy {
+    /// 1.0 or later: `env_version` is frozen per id (ADR-0094 item 2).
+    pub stable: bool,
+    /// The passed control run, for a generator re-bless.
+    pub control: Option<ControlMark>,
+}
+
+impl Policy {
+    /// The policy of this build: `stable` from the crate version, and the
+    /// control mark from `TESSERA_GOLDEN_CONTROL=<dir>`, if any.
+    #[must_use]
+    pub fn from_env(name: &str) -> Self {
+        let control = std::env::var_os("TESSERA_GOLDEN_CONTROL").and_then(|dir| {
+            let dir = PathBuf::from(dir);
+            let mark =
+                ControlMark::parse(&std::fs::read_to_string(control_path(&dir, name)).ok()?)?;
+            // The mark must name the actions file still on disk.
+            let actions = std::fs::read(actions_path(&dir, name)).ok()?;
+            (digest(&actions) == mark.actions).then_some(mark)
+        });
+        Self {
+            stable: stable_version(env!("CARGO_PKG_VERSION")),
+            control,
+        }
+    }
+}
+
+/// Whether `version` is 1.0 or later: its major number is at least 1, so a
+/// `1.0.0-rc.N` already counts (ADR-0094 item 2's freeze starts there).
+#[must_use]
+pub fn stable_version(version: &str) -> bool {
+    version
+        .split(['.', '-', '+'])
+        .next()
+        .and_then(|m| m.parse::<u64>().ok())
+        .is_some_and(|major| major >= 1)
+}
+
 /// What blessing does with a fixture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bless {
@@ -571,11 +773,17 @@ pub enum Bless {
     Write,
 }
 
-/// The bless policy (ADR-0008, ADR-0023), pure. A changed fixture needs
-/// an `env_version` bump; a `MATH_VERSION` bump alone does not authorize it
-/// (new math is a new environment version that records it). A format or
-/// generator change is a harness migration and needs the matching
-/// `reason`.
+/// The bless policy (ADR-0008, ADR-0023, ADR-0094 item 2), pure.
+///
+/// - Before 1.0, a changed fixture needs an `env_version` bump. From 1.0
+///   (`policy.stable`), `env_version` is frozen per id and a bump is
+///   refused: the change belongs under a new id (ADR-0080).
+/// - A `MATH_VERSION` bump alone never authorizes a change.
+/// - A format change is a harness migration and needs
+///   `reason = Format`.
+/// - A generator change needs `reason = Generator` and a passed control run
+///   for the fixture being replaced (`policy.control`): the recorded
+///   actions reproduced it, so the environment did not change.
 ///
 /// # Errors
 ///
@@ -584,6 +792,7 @@ pub fn bless_decision(
     old: Option<&str>,
     new: &str,
     reason: Option<BlessReason>,
+    policy: Policy,
 ) -> Result<Bless, String> {
     let Some(old) = old else {
         return Ok(Bless::Write);
@@ -594,11 +803,30 @@ pub fn bless_decision(
     let (o, n): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
     let changed = |key| value(&o, key) != value(&n, key);
     if changed("env_version") {
+        if policy.stable {
+            return Err(format!(
+                "env_version is frozen per id from 1.0 (ADR-0094 item 2): register the \
+                 changed environment under a new id instead (ADR-0080), id {:?}",
+                value(&o, "env_id").unwrap_or("?")
+            ));
+        }
         return Ok(Bless::Write);
     }
     match reason {
         Some(BlessReason::Format) if changed("format") => Ok(Bless::Write),
-        Some(BlessReason::Generator) if changed("actions") => Ok(Bless::Write),
+        Some(BlessReason::Generator) if changed("actions") => match policy.control {
+            Some(mark) if mark.fixture == digest(old.as_bytes()) => Ok(Bless::Write),
+            Some(_) => Err(
+                "the control run is for another fixture: rerun TESSERA_GOLDEN_CONTROL=<dir> \
+                 against the committed one"
+                    .to_owned(),
+            ),
+            None => Err(
+                "a generator re-bless needs a passed control run (ADR-0094 item 2): run \
+                 TESSERA_GOLDEN_CONTROL=<dir> first, with the actions recorded before the change"
+                    .to_owned(),
+            ),
+        },
         _ => Err(
             "a changed fixture needs an env_version bump (ADR-0023); MATH_VERSION alone \
                   does not authorize it, and a format or generator migration needs \
@@ -617,10 +845,11 @@ pub fn bless_into(
     file: &std::path::Path,
     lines: &[String],
     reason: Option<BlessReason>,
+    policy: Policy,
 ) -> Result<Bless, String> {
     let fresh = lines.join("\n") + "\n";
     let old = std::fs::read_to_string(file).ok();
-    let decision = bless_decision(old.as_deref(), &fresh, reason)?;
+    let decision = bless_decision(old.as_deref(), &fresh, reason, policy)?;
     if decision == Bless::Write {
         std::fs::write(file, &fresh).map_err(|e| format!("{}: {e}", file.display()))?;
     }
@@ -686,15 +915,22 @@ pub fn compare_text(name: &str, committed: &str, lines: &[String]) -> Result<(),
 }
 
 /// Compares `lines` with the committed fixture `name` (read-only), or
-/// blesses it under `TESSERA_BLESS=1` and the bless policy.
+/// blesses it under `TESSERA_BLESS=1` and the bless policy. In a control
+/// run (`TESSERA_GOLDEN_CONTROL=<dir>`, no bless), it compares ignoring the
+/// `actions=` line and, on a match, writes `<dir>/<name>.control`.
 ///
 /// # Panics
 ///
 /// On any difference, or a refused bless.
 pub fn check(name: &str, lines: &[String]) {
     let file = path(name);
-    if std::env::var_os("TESSERA_BLESS").is_some_and(|v| v == "1") {
-        if let Err(e) = bless_into(&file, lines, BlessReason::from_env()) {
+    if bless_requested() {
+        if let Err(e) = bless_into(
+            &file,
+            lines,
+            BlessReason::from_env(),
+            Policy::from_env(name),
+        ) {
             panic!("{name}: {e}");
         }
         return;
@@ -705,6 +941,19 @@ pub fn check(name: &str, lines: &[String]) {
             file.display()
         );
     };
+    if let Some(dir) = control_replay_dir() {
+        if let Err(e) = control_compare(name, &committed, lines) {
+            panic!("{name}: control run failed, the environment changed: {e}");
+        }
+        let actions = std::fs::read(actions_path(&dir, name)).unwrap_or_default();
+        let mark = ControlMark {
+            fixture: digest(committed.as_bytes()),
+            actions: digest(&actions),
+        };
+        std::fs::write(control_path(&dir, name), mark.text())
+            .unwrap_or_else(|e| panic!("{name}: control mark: {e}"));
+        return;
+    }
     if let Err(e) = compare_text(name, &committed, lines) {
         panic!("{e}");
     }
