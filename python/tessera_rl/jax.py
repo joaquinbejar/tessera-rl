@@ -353,9 +353,9 @@ def _register_ffi_targets() -> None:
 
 
 class FfiHandle:
-    """An XLA FFI handle over an existing Sync ``Env`` (ADR-0095),
-    **experimental**: the native step runs inside XLA, without the
-    interpreter and with one copy of the outputs.
+    """An XLA FFI handle over an existing Sync ``Env`` (ADR-0095): the
+    native step runs inside XLA, without the interpreter and with one copy
+    of the outputs.
 
     Calls are ordered by an explicit token, threaded by the caller:
     ``token, step = h.step(token, actions)``. ``h.token()`` gives the next
@@ -502,5 +502,5 @@ class FfiHandle:
 
 def ffi_handle(env: _env.Env) -> FfiHandle:
     """An XLA FFI handle over ``env``, a Sync ``tessera_rl.Env``
-    (experimental, ADR-0095; see ``FfiHandle``)."""
+    (ADR-0095; see ``FfiHandle``)."""
     return FfiHandle(env)
