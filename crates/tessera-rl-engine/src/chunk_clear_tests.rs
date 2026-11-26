@@ -186,3 +186,31 @@ fn test_chunk_clear_invalid_agent_event_does_not_survive_a_step_or_a_mid_chunk_r
     step(&mut p, [QUIET, SPAWN, QUIET, SPAWN, QUIET]);
     assert_eq!(events(&mut p), [only(&[]), only(&[]), only(&[])]);
 }
+
+/// Fork and restore overwrite a destination and clear its agent event rows
+/// through `clear_instance`, on its several-agent path (#757): a death the
+/// last step set on a destination does not survive, while an untouched
+/// instance keeps its own.
+#[test]
+fn test_chunk_clear_fork_and_restore_clear_the_destinations_agent_rows() {
+    let mut p = pool();
+    // Slot 1 dies in every instance but 2.
+    step(&mut p, [KILL, KILL, QUIET, KILL, KILL]);
+    assert_eq!(
+        events(&mut p),
+        [
+            only(&[(0, 1), (1, 1), (3, 1), (4, 1)]),
+            only(&[]),
+            only(&[])
+        ],
+        "the step's deaths"
+    );
+    p.fork(2, &[0, 4]).unwrap();
+    let record = p.snapshot(2).unwrap();
+    p.restore(1, &record).unwrap();
+    assert_eq!(
+        events(&mut p),
+        [only(&[(3, 1)]), only(&[]), only(&[])],
+        "only instance 3, neither forked into nor restored, keeps its death"
+    );
+}

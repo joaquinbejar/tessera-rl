@@ -2976,18 +2976,39 @@ pub(crate) fn set(buf: &mut [Bool8], i: usize, value: bool) {
 }
 
 pub(crate) fn clear_instance(outputs: &mut OutputsView<'_>, i: usize) {
-    crate::clear_rows::clear_agent_rows(
-        [
-            &mut *outputs.agent_terminated,
-            &mut *outputs.agent_truncated,
-            &mut *outputs.died,
-            &mut *outputs.spawned,
-            &mut *outputs.invalid_agent_event,
-        ],
-        &mut *outputs.rewards,
-        i,
-        outputs.agents,
-    );
+    let a = outputs.agents;
+    if a == 1 {
+        // One agent: direct stores (#757).
+        crate::clear_rows::clear_one_agent_rows(
+            [
+                &mut *outputs.agent_terminated,
+                &mut *outputs.agent_truncated,
+                &mut *outputs.died,
+                &mut *outputs.spawned,
+                &mut *outputs.invalid_agent_event,
+            ],
+            &mut *outputs.rewards,
+            i,
+        );
+    } else {
+        // Several agents: the span fills, inline as before #760 (the
+        // out-of-line helper cost 49 Ir more per Tag instance, #757 twin).
+        let range = i * a..(i + 1) * a;
+        for buf in [
+            &mut outputs.agent_terminated,
+            &mut outputs.agent_truncated,
+            &mut outputs.died,
+            &mut outputs.spawned,
+            &mut outputs.invalid_agent_event,
+        ] {
+            if let Some(rows) = buf.get_mut(range.clone()) {
+                rows.fill(Bool8::FALSE);
+            }
+        }
+        if let Some(rows) = outputs.rewards.get_mut(range) {
+            rows.fill(0.0);
+        }
+    }
     set(outputs.episode_terminated, i, false);
     set(outputs.episode_truncated, i, false);
     for buf in [
