@@ -635,6 +635,13 @@ fn handle_of(attrs: &Attrs) -> Result<Handle, Fail> {
         }
         *target = Some(value);
     }
+    // A handle is not a capability (#738): it is built here from the call's
+    // attributes, and `_xla_token`, `_xla_take_error` and `_xla_close` build
+    // it from Python integers, so any caller can name any slot and
+    // generation. The registry checks every use against the slot's current
+    // generation and entry; a handle that names nothing live is refused or,
+    // in `close`, does nothing to a slot that holds or is getting an entry.
+    // Forged attributes are in-process misuse, and they stay memory-safe.
     match (slot.map(u32::try_from), generation.map(u64::try_from)) {
         (Some(Ok(slot)), Some(Ok(generation))) => Ok(Handle { slot, generation }),
         _ => Err(invalid(
