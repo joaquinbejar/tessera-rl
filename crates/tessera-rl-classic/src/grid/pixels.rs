@@ -95,12 +95,6 @@ pub(crate) fn write<S: PixelSink + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    #![expect(
-        clippy::unwrap_used,
-        clippy::indexing_slicing,
-        reason = "test helpers: a failure is the assertion"
-    )]
-
     use proptest::prelude::*;
     use tessera_rl_core::Asset;
 
