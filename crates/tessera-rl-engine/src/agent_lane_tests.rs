@@ -61,6 +61,10 @@ const fn hooked(level: Level) -> u32 {
     }
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "the AgentLaneHook signature passes the adaptive values by reference"
+)]
 fn hook(
     _: &UnitConfig,
     _: &NoAdaptive,
@@ -131,7 +135,9 @@ impl<const A: usize, const HOOK: bool, const ADAPT: bool, const HEADS: bool>
 impl<const A: usize, const HOOK: bool, const ADAPT: bool, const HEADS: bool> ActionMask
     for Probe<A, HOOK, ADAPT, HEADS>
 {
-    fn action_mask(_: &UnitConfig, _: &Unit, _: AgentSlot, _: &mut MaskWriter<'_>) {}
+    fn action_mask(_: &UnitConfig, _: &Unit, _: AgentSlot, mask: &mut MaskWriter<'_>) {
+        mask.fill(true);
+    }
 
     fn noop(_: &UnitConfig, _: &Unit, _: AgentSlot, _: &mut ActionWriter<'_>) {}
 }
