@@ -27,7 +27,7 @@ use tessera_rl_num::Fx32;
 use tessera_rl_num::rng::{ObsRng, StepRng};
 use tessera_rl_simd::Resolved;
 
-use crate::grid::{GridConfig, GridObs, layout};
+use crate::grid::{GridConfig, GridObs, layout, pixels};
 
 /// Environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/GridLanes-v1";
@@ -142,9 +142,7 @@ impl Environment for GridLanes {
         let Some(mut leaf) = out.leaf_mut(GridObs::PIXELS) else {
             return;
         };
-        pixels(cfg, s.cell(), (s.goal_col, s.goal_row), |k, v| {
-            leaf.set(k, v);
-        });
+        pixels::write(cfg, s.cell(), (s.goal_col, s.goal_row), &mut leaf);
     }
 }
 
@@ -198,19 +196,6 @@ const fn outcome(won: bool, off: bool) -> GridOutcome {
     }
 }
 
-/// Grid's observation, cell by cell: the agent, the goal, and the border
-/// and walls, each 255 where lit and 0 elsewhere.
-fn pixels(cfg: &GridConfig, agent: (i32, i32), goal: (i32, i32), mut set: impl FnMut(usize, u8)) {
-    let n = i32::from(cfg.size);
-    let cells = usize::from(cfg.size) * usize::from(cfg.size);
-    let lit = |on: bool| if on { 255 } else { 0 };
-    for (k, (row, col)) in (0..n).flat_map(|r| (0..n).map(move |c| (r, c))).enumerate() {
-        set(k, lit((col, row) == agent));
-        set(cells + k, lit((col, row) == goal));
-        set(2 * cells + k, lit(layout::border_or_wall(cfg, col, row)));
-    }
-}
-
 /// Groups stepped through `step_lanes`, counted in test builds only, so a
 /// test can tell the lane path ran (the scalar fallback gives the same
 /// bytes).
@@ -260,11 +245,7 @@ impl LaneEnvironment for GridLanes {
                 return;
             };
             let agent = (c.to_raw() >> 16, r.to_raw() >> 16);
-            pixels(cfg, agent, (*gc, *gr), |k, v| {
-                if let Some(b) = dst.get_mut(k) {
-                    *b = v;
-                }
-            });
+            pixels::write(cfg, agent, (*gc, *gr), dst);
         }
     }
 }

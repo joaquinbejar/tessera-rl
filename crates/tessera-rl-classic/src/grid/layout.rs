@@ -75,6 +75,28 @@ impl GridLayout {
             .is_some_and(|b| b & (1 << (k % 8)) != 0)
     }
 
+    /// The wall cells inside an `n`-wide grid, as row-major indices
+    /// `row * n + col`, in increasing order: exactly the cells with
+    /// `col, row < n` where [`Self::is_wall`] is true (#751).
+    pub(crate) fn wall_cells(&self, n: u16) -> impl Iterator<Item = usize> + '_ {
+        let side = usize::from(self.side).max(1);
+        let used = usize::from(self.side) * usize::from(self.side);
+        let n = usize::from(n);
+        self.walls
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &b)| {
+                (0..8)
+                    .filter(move |j| b & (1 << j) != 0)
+                    .map(move |j| i * 8 + j)
+            })
+            .filter(move |&k| k < used)
+            .filter_map(move |k| {
+                let (row, col) = (k / side, k % side);
+                (row < n && col < n).then_some(row * n + col)
+            })
+    }
+
     fn with_walls(side: u16, walls: Vec<u8>) -> Self {
         let wall_count = walls.iter().map(|b| b.count_ones()).sum();
         Self {

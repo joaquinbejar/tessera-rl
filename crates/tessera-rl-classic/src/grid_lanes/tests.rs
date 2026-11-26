@@ -15,8 +15,9 @@ use tessera_rl_core::{Asset, EpisodeEnd, LANES, LaneEnvironment, LaneOut};
 use tessera_rl_num::Fx32;
 use tessera_rl_simd::Resolved;
 
-use super::{Ending, GridLanes, GridLanesState, GridOutcome, LANE_STEPS, pixels, transition};
+use super::{Ending, GridLanes, GridLanesState, GridOutcome, LANE_STEPS, transition};
 use crate::grid::GridConfig;
+use crate::grid::pixels;
 
 const ROOMS: &[u8] =
     b"....#...\n....#...\n........\n....#...\n###.####\n....#...\n........\n....#...\n";
@@ -108,7 +109,7 @@ fn scalar(
 /// `GridLanes::observe`'s bytes for one instance.
 fn observe_scalar(cfg: &GridConfig, s: &GridLanesState) -> Vec<u8> {
     let mut row = vec![0u8; 3 * usize::from(cfg.size) * usize::from(cfg.size)];
-    pixels(cfg, s.cell(), (s.goal_col, s.goal_row), |k, v| row[k] = v);
+    pixels::write(cfg, s.cell(), (s.goal_col, s.goal_row), row.as_mut_slice());
     row
 }
 

@@ -5,6 +5,7 @@
 
 mod checks;
 pub mod layout;
+pub(crate) mod pixels;
 mod render;
 
 use tessera_rl_core::io::{Actions, ObsWriter};
@@ -142,15 +143,7 @@ impl Environment for Grid {
         let Some(mut leaf) = out.leaf_mut(GridObs::PIXELS) else {
             return;
         };
-        let n = i32::from(cfg.size);
-        let cells = usize::from(cfg.size) * usize::from(cfg.size);
         let goal = (i32::from(s.goal[0]), i32::from(s.goal[1]));
-        for (k, (row, col)) in (0..n).flat_map(|r| (0..n).map(move |c| (r, c))).enumerate() {
-            let edge = layout::border_or_wall(cfg, col, row);
-            let lit = |on: bool| if on { 255 } else { 0 };
-            leaf.set(k, lit((col, row) == s.cell()));
-            leaf.set(cells + k, lit((col, row) == goal));
-            leaf.set(2 * cells + k, lit(edge));
-        }
+        pixels::write(cfg, s.cell(), goal, &mut leaf);
     }
 }
