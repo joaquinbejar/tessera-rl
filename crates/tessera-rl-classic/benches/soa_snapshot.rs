@@ -7,8 +7,11 @@
 //! records, at N = 8192 in chunks of 8. The group `soa_snapshot_grid_8192`
 //! times `snapshot_all`, `fork` and `fork_branched` on `GridLanes` (the first
 //! shipped lane-wise environment, ADR-0090 stage 2) against `Grid`, at the
-//! same N and chunk size with the default `GridConfig` (#735). A report, not
-//! a gate: no claim is made from these numbers.
+//! same N and chunk size with the default `GridConfig` (#735). The group
+//! `multi_agent_fork_8192` times the same three on `Tag` (8 agent slots, 4
+//! alive with the default `TagConfig`), the one multi-agent case, for the
+//! per-agent row clears of a fork or restore (#757). A report, not a gate:
+//! no claim is made from these numbers.
 
 #![expect(clippy::unwrap_used, reason = "bench setup unwraps")]
 
@@ -18,7 +21,7 @@ use std::hint::black_box;
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::{CartPole, CartPoleConfig};
-use tessera_rl_classic::{Grid, GridConfig, GridLanes};
+use tessera_rl_classic::{Grid, GridConfig, GridLanes, Tag, TagConfig};
 use tessera_rl_core::Environment;
 use tessera_rl_engine::{ActionInput, EnvPool, PoolOptions, Record, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -136,6 +139,10 @@ fn bench(c: &mut Criterion) {
         GridLanes,
         GridConfig::default()
     );
+    group.finish();
+
+    let mut group = c.benchmark_group("multi_agent_fork_8192");
+    bounded_cases!(&mut group, "aos_tag", Tag, TagConfig::default());
     group.finish();
 }
 
