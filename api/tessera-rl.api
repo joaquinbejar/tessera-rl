@@ -57,6 +57,7 @@ assoc_const tessera_rl::core::Bool8::TRUE: Self
 assoc_const tessera_rl::core::Canonical::ENCODED_LEN: usize
 assoc_const tessera_rl::core::EnvState::LANES: bool
 assoc_const tessera_rl::core::Environment::ADAPTERS: tessera_rl_core::adapters::Adapters
+assoc_const tessera_rl::core::Environment::AGENT_LANE: core::option::Option<tessera_rl_core::agent_lane::AgentLaneHook<Self>>
 assoc_const tessera_rl::core::Environment::LANE_ENV: core::option::Option<tessera_rl_core::lane_env::LaneEnvHooks<Self>>
 assoc_const tessera_rl::core::Environment::LANE_STEP: core::option::Option<tessera_rl_core::lane_step::LaneHook<Self>>
 assoc_const tessera_rl::core::Environment::MAX_AGENTS: usize
@@ -95,6 +96,7 @@ assoc_const tessera_rl::core::encoding::Canonical::ENCODED_LEN: usize
 assoc_const tessera_rl::core::encoding::HashSink::BUFFER_LEN: usize
 assoc_const tessera_rl::core::env::EnvState::LANES: bool
 assoc_const tessera_rl::core::env::Environment::ADAPTERS: tessera_rl_core::adapters::Adapters
+assoc_const tessera_rl::core::env::Environment::AGENT_LANE: core::option::Option<tessera_rl_core::agent_lane::AgentLaneHook<Self>>
 assoc_const tessera_rl::core::env::Environment::LANE_ENV: core::option::Option<tessera_rl_core::lane_env::LaneEnvHooks<Self>>
 assoc_const tessera_rl::core::env::Environment::LANE_STEP: core::option::Option<tessera_rl_core::lane_step::LaneHook<Self>>
 assoc_const tessera_rl::core::env::Environment::MAX_AGENTS: usize
@@ -255,6 +257,7 @@ assoc_const tessera_rl::prelude::Bool8::FALSE: Self
 assoc_const tessera_rl::prelude::Bool8::TRUE: Self
 assoc_const tessera_rl::prelude::EnvState::LANES: bool
 assoc_const tessera_rl::prelude::Environment::ADAPTERS: tessera_rl_core::adapters::Adapters
+assoc_const tessera_rl::prelude::Environment::AGENT_LANE: core::option::Option<tessera_rl_core::agent_lane::AgentLaneHook<Self>>
 assoc_const tessera_rl::prelude::Environment::LANE_ENV: core::option::Option<tessera_rl_core::lane_env::LaneEnvHooks<Self>>
 assoc_const tessera_rl::prelude::Environment::LANE_STEP: core::option::Option<tessera_rl_core::lane_step::LaneHook<Self>>
 assoc_const tessera_rl::prelude::Environment::MAX_AGENTS: usize
@@ -733,6 +736,7 @@ enum tessera_rl::core::space::DType
 enum tessera_rl::core::space::JointError
 enum tessera_rl::core::space::Space
 enum tessera_rl::core::step_out::EpisodeEnd
+enum tessera_rl::engine::AgentLanes
 enum tessera_rl::engine::AutoReset
 enum tessera_rl::engine::EngineError
 enum tessera_rl::engine::IllegalActionPolicy
@@ -1100,6 +1104,7 @@ field tessera_rl::engine::PoolContext.adaptive: tessera_rl_engine::adaptive::rep
 field tessera_rl::engine::PoolContext.branch_counter: u64
 field tessera_rl::engine::PoolContext.policy_map: u64
 field tessera_rl::engine::PoolContext.reset_source: tessera_rl_engine::archive::context::ResetSourceContext
+field tessera_rl::engine::PoolOptions.agent_lanes: tessera_rl_engine::agent_lanes::AgentLanes
 field tessera_rl::engine::PoolOptions.auto_reset: tessera_rl_engine::options::AutoReset
 field tessera_rl::engine::PoolOptions.chunk_size: core::num::nonzero::NonZeroU32
 field tessera_rl::engine::PoolOptions.illegal_action: tessera_rl_engine::masks::IllegalActionPolicy
@@ -1596,6 +1601,7 @@ field tessera_rl::prelude::PoolContext.adaptive: tessera_rl_engine::adaptive::re
 field tessera_rl::prelude::PoolContext.branch_counter: u64
 field tessera_rl::prelude::PoolContext.policy_map: u64
 field tessera_rl::prelude::PoolContext.reset_source: tessera_rl_engine::archive::context::ResetSourceContext
+field tessera_rl::prelude::PoolOptions.agent_lanes: tessera_rl_engine::agent_lanes::AgentLanes
 field tessera_rl::prelude::PoolOptions.auto_reset: tessera_rl_engine::options::AutoReset
 field tessera_rl::prelude::PoolOptions.chunk_size: core::num::nonzero::NonZeroU32
 field tessera_rl::prelude::PoolOptions.illegal_action: tessera_rl_engine::masks::IllegalActionPolicy
@@ -4748,6 +4754,19 @@ impl tessera_rl::engine::AdaptiveTargets: impl<'a, E> core::marker::Send for tes
 impl tessera_rl::engine::AdaptiveTargets: impl<'a, E> core::marker::Sync for tessera_rl_engine::adaptive::curriculum::AdaptiveTargets<'a, E>
 impl tessera_rl::engine::AdaptiveTargets: impl<'a, E> core::marker::Unpin for tessera_rl_engine::adaptive::curriculum::AdaptiveTargets<'a, E>
 impl tessera_rl::engine::AdaptiveTargets: impl<'a, E> core::panic::unwind_safe::RefUnwindSafe for tessera_rl_engine::adaptive::curriculum::AdaptiveTargets<'a, E> where <<E as tessera_rl_core::env::Environment>::Header as tessera_rl_core::header::RecordLayout>::Adaptive: core::panic::unwind_safe::RefUnwindSafe
+impl tessera_rl::engine::AgentLanes: impl core::clone::Clone for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::cmp::Eq for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::cmp::PartialEq for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::default::Default for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::fmt::Debug for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::hash::Hash for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::marker::Copy for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::marker::Send for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::marker::StructuralPartialEq for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::marker::Sync for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::marker::Unpin for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_engine::agent_lanes::AgentLanes
+impl tessera_rl::engine::AgentLanes: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_engine::agent_lanes::AgentLanes
 impl tessera_rl::engine::Archive: impl<E: tessera_rl_core::env::Environment> core::clone::Clone for tessera_rl_engine::archive::Archive<E>
 impl tessera_rl::engine::Archive: impl<E: tessera_rl_core::env::Environment> core::fmt::Debug for tessera_rl_engine::archive::Archive<E>
 impl tessera_rl::engine::Archive: impl<E> core::marker::Send for tessera_rl_engine::archive::Archive<E>
@@ -9816,6 +9835,7 @@ mod tessera_rl::classic::tag::grid
 mod tessera_rl::core
 mod tessera_rl::core::adapters
 mod tessera_rl::core::agent
+mod tessera_rl::core::agent_lane
 mod tessera_rl::core::asset
 mod tessera_rl::core::bool8
 mod tessera_rl::core::config
@@ -10422,8 +10442,10 @@ trait tessera_rl::simd::Lanes: trait Lanes: tessera_rl_simd::int_lanes::sealed::
 type tessera_rl::classic::cartpole::lane::Columns = [[f64; 8]; 4]
 type tessera_rl::classic::tag::grid::Cell = [i16; 2]
 type tessera_rl::core::Adaptive<E> = <<E as tessera_rl_core::env::Environment>::Header as tessera_rl_core::header::RecordLayout>::Adaptive
+type tessera_rl::core::AgentLaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, &tessera_rl_core::env::Adaptive<E>, &mut <E as tessera_rl_core::env::Environment>::State, &tessera_rl_core::io::Actions<'_, <E as tessera_rl_core::env::Environment>::Action>, &mut tessera_rl_num::rng::StepRng, &mut tessera_rl_core::step_out::StepOut<'_>, tessera_rl_simd::dispatch::Resolved)
 type tessera_rl::core::LaneGroup<'a, E> = <<<E as tessera_rl_core::env::Environment>::State as tessera_rl_core::env::EnvState>::Fields as tessera_rl_core::lane_field::LaneTuple>::Group<'a>
 type tessera_rl::core::LaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, tessera_rl_simd::dispatch::Resolved, &mut [<E as tessera_rl_core::env::Environment>::State; 8], &[i32; 8], &mut tessera_rl_core::lane_step::LaneOut)
+type tessera_rl::core::agent_lane::AgentLaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, &tessera_rl_core::env::Adaptive<E>, &mut <E as tessera_rl_core::env::Environment>::State, &tessera_rl_core::io::Actions<'_, <E as tessera_rl_core::env::Environment>::Action>, &mut tessera_rl_num::rng::StepRng, &mut tessera_rl_core::step_out::StepOut<'_>, tessera_rl_simd::dispatch::Resolved)
 type tessera_rl::core::env::Adaptive<E> = <<E as tessera_rl_core::env::Environment>::Header as tessera_rl_core::header::RecordLayout>::Adaptive
 type tessera_rl::core::lane_env::LaneGroup<'a, E> = <<<E as tessera_rl_core::env::Environment>::State as tessera_rl_core::env::EnvState>::Fields as tessera_rl_core::lane_field::LaneTuple>::Group<'a>
 type tessera_rl::core::lane_step::LaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, tessera_rl_simd::dispatch::Resolved, &mut [<E as tessera_rl_core::env::Environment>::State; 8], &[i32; 8], &mut tessera_rl_core::lane_step::LaneOut)
@@ -10588,6 +10610,8 @@ variant tessera_rl::core::space::Space::Set { inner: alloc::boxed::Box<tessera_r
 variant tessera_rl::core::space::Space::Tuple(alloc::vec::Vec<tessera_rl_core::space::definition::Space>)
 variant tessera_rl::core::step_out::EpisodeEnd::Terminated
 variant tessera_rl::core::step_out::EpisodeEnd::Truncated
+variant tessera_rl::engine::AgentLanes::Auto
+variant tessera_rl::engine::AgentLanes::Reference
 variant tessera_rl::engine::AutoReset::Disabled
 variant tessera_rl::engine::AutoReset::NextStep
 variant tessera_rl::engine::AutoReset::SameStep
