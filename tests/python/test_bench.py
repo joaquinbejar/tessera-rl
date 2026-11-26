@@ -630,3 +630,86 @@ def test_bench_successful_runner_output_is_returned_unchanged(monkeypatch, capsy
     monkeypatch.setattr(bench.subprocess, "run", fake)
     assert bench._run_runner(["runner"]).stdout == "{}"
     assert capsys.readouterr().err == ""
+
+
+# -- source commit (#640) -------------------------------------------------------
+
+_A = "a" * 40
+_B = "b" * 40
+
+
+def _fake_git(monkeypatch, tmp_path, head=None, rev="unknown", status="unknown", top=None):
+    """``top`` is the work tree's top level: the source root when ``rev`` is a
+    commit, unless given."""
+    monkeypatch.setattr(bench, "ROOT", tmp_path)
+    if head is not None:
+        (tmp_path / ".head").write_text(head + "\n", encoding="utf-8")
+    if top is None:
+        top = str(tmp_path) if rev != "unknown" else "unknown"
+    answers = {("rev-parse", "--show-toplevel"): top, ("rev-parse", "HEAD"): rev, ("status", "--porcelain"): status}
+    monkeypatch.setattr(bench, "_run", lambda cmd: answers.get(tuple(cmd[1:]), "unknown"))
+
+
+def test_source_archive_with_head_returns_head_clean(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_A)
+    assert bench._source() == (_A, False, ".head")
+
+
+def test_source_no_checkout_no_head_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="commit is unknown"):
+        bench._source()
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "A" * 40, _A + "0", "g" * 40])
+def test_source_malformed_head_raises(monkeypatch, tmp_path, bad):
+    _fake_git(monkeypatch, tmp_path, head=bad, rev=_A, status="")
+    with pytest.raises(RuntimeError, match="40-hex"):
+        bench._source()
+
+
+def test_source_checkout_returns_commit_and_dirty(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, rev=_A, status="")
+    assert bench._source() == (_A, False, "checkout")
+    _fake_git(monkeypatch, tmp_path, rev=_A, status=" M x")
+    assert bench._source() == (_A, True, "checkout")
+
+
+def test_source_head_disagreeing_with_checkout_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_B, rev=_A, status="")
+    with pytest.raises(RuntimeError, match="says"):
+        bench._source()
+
+
+def test_source_checkout_status_failure_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, rev=_A, status="unknown")
+    with pytest.raises(RuntimeError, match="git status failed"):
+        bench._source()
+
+
+def test_source_environment_records_git_source(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_A)
+    software = bench.environment(None)["software"]
+    assert (software["git"], software["git_dirty"], software["git_source"]) == (_A, False, ".head")
+
+
+def test_run_unknown_commit_raises_before_any_runner_call(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(bench, "runner_path", lambda *a, **k: calls.append("build") or tmp_path / "runner")
+    monkeypatch.setattr(bench, "_run_runner", lambda argv: calls.append("run"))
+    monkeypatch.setattr(bench, "load", lambda *a, **k: calls.append("load") or ({"config": []}, {}))
+    with pytest.raises(RuntimeError, match="commit is unknown"):
+        bench.run(quick=True, profile="debug")
+    assert calls == []
+
+
+def test_source_inside_outer_work_tree_without_head_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, rev=_A, status="", top=str(tmp_path.parent))
+    with pytest.raises(RuntimeError, match="no git checkout rooted"):
+        bench._source()
+
+
+def test_source_inside_outer_work_tree_takes_head_not_outer_commit(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_B, rev=_A, status=" M x", top=str(tmp_path.parent))
+    assert bench._source() == (_B, False, ".head")
