@@ -216,6 +216,34 @@ fn test_grid_lanes_kernel_matches_scalar_on_negative_half_cells() {
 }
 
 #[test]
+fn test_grid_lanes_kernel_floors_negative_cells_against_any_goal() {
+    // The cell is `to_raw() >> 16`, an arithmetic shift: a position one cell
+    // left of the grid is cell -1, never 65535 (a logical shift's result),
+    // so a goal at 65535, outside any grid, is not reached. The lane contract
+    // holds for every state, not only validated ones.
+    let cfg = &configs()[0];
+    let mut states = [GridLanesState::default(); LANES];
+    for (l, s) in states.iter_mut().enumerate() {
+        s.col = Fx32::from_raw(-(1 << 16));
+        s.row = Fx32::from_raw(i32::try_from(l % 4).unwrap() << 16);
+        s.goal_col = 65535;
+        s.goal_row = s.row.to_raw() >> 16;
+    }
+    // North and south keep the agent one cell off the grid.
+    let actions = [0, 1, 0, 1, 0, 1, 0, 1];
+    for level in Resolved::available() {
+        let (lanes, out) = lane_step(level, cfg, &states, &actions);
+        for l in 0..LANES {
+            let (want, reward, end) = scalar(cfg, states[l], actions[l]);
+            assert_eq!(lanes[l], want, "{level:?} lane {l}");
+            assert_eq!(want.outcome, GridOutcome::OutOfBounds);
+            assert_eq!(out.reward[l].to_bits(), reward.to_bits());
+            assert_eq!(out.end[l], end);
+        }
+    }
+}
+
+#[test]
 fn test_grid_lanes_steps_full_groups_through_the_lane_kernel() {
     use tessera_rl_engine::{ActionInput, EnvPool, PoolOptions, Reseed};
     use tessera_rl_num::identity::Seed;
