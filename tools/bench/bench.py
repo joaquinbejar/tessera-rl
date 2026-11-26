@@ -250,6 +250,21 @@ def _limit(cfg: dict, method: dict) -> int:
     return int(cfg.get("max_episode_steps", method["max_episode_steps"]))
 
 
+def _run_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """Runs the bench runner. On failure its stdout and stderr go to this
+    process's stderr before ``CalledProcessError`` is raised, so the
+    runner's own message reaches the log (#640, #728)."""
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(f"bench runner failed with rc={proc.returncode}: {' '.join(argv)}", file=sys.stderr)
+        if proc.stdout:
+            print(f"runner stdout:\n{proc.stdout}", file=sys.stderr, end="" if proc.stdout.endswith("\n") else "\n")
+        if proc.stderr:
+            print(f"runner stderr:\n{proc.stderr}", file=sys.stderr, end="" if proc.stderr.endswith("\n") else "\n")
+        raise subprocess.CalledProcessError(proc.returncode, argv, output=proc.stdout, stderr=proc.stderr)
+    return proc
+
+
 def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     env, n = cfg["env"], str(cfg["num_envs"])
     metric = cfg["metric"]
@@ -275,7 +290,7 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     cpus = _cpus_for(cfg, pin)
     if cpus and workers > 0:
         args += ["--cpus", ",".join(str(c) for c in cpus)]
-    proc = subprocess.run([*_prefix(pin, cpus), str(runner), *args], capture_output=True, text=True, check=True)
+    proc = _run_runner([*_prefix(pin, cpus), str(runner), *args])
     raw = json.loads(proc.stdout)
     stats = {k: summarize(v, method["bootstrap_resamples"], method["bootstrap_seed"]) for k, v in raw.items() if isinstance(v, list)}
     # The runner shares this host; its CPU model is the harness's. The

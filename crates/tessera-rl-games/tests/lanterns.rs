@@ -554,3 +554,141 @@ fn test_lanterns_info_heuristic_equals_act_on_states_with_one_info_state() {
         }
     }
 }
+
+/// A pool of `n` instances of `players` players, reset.
+fn pool_n(players: u32, n: u32, seed: u64) -> EnvPool<Lanterns, Masked> {
+    let options = PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(seed));
+    let mut p = EnvPool::with_masks(cfg(players), options).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    p
+}
+
+/// Steps instance 0 with `action` for `mover`. Every other instance is its
+/// own game (each instance has its own deal), so its mover plays its first
+/// legal action (debug checks reject masked-out actions).
+fn step_all(p: &mut EnvPool<Lanterns, Masked>, n: usize, mover: usize, action: u32) {
+    let mut a = vec![0i32; lanterns::MAX_AGENTS * n];
+    a[mover] = i32::try_from(action).unwrap();
+    let masks: Vec<bool> = p
+        .outputs()
+        .unwrap()
+        .masks()
+        .iter()
+        .map(|b| b.get())
+        .collect();
+    let per = lanterns::MAX_AGENTS * ACTIONS as usize;
+    for i in 1..n {
+        let m = usize::from(p.state(u32::try_from(i).unwrap()).unwrap().to_move);
+        let row = &masks[i * per + m * ACTIONS as usize..i * per + (m + 1) * ACTIONS as usize];
+        let legal = (0..ACTIONS as usize).find(|&k| row[k]).unwrap();
+        a[i * lanterns::MAX_AGENTS + m] = i32::try_from(legal).unwrap();
+    }
+    p.step(ActionInput {
+        discrete: &a,
+        continuous: &[],
+    })
+    .unwrap();
+}
+
+/// Whether a seat's hand has a card after an empty slot.
+fn has_hole(s: &LanternsState, players: usize) -> bool {
+    s.hands.iter().take(players).any(|h| {
+        let first_empty = h.iter().position(|&c| c == NO_CARD);
+        first_empty.is_some_and(|e| h[e..].iter().any(|&c| c != NO_CARD))
+    })
+}
+
+/// Import, restore and fork of `s` (instance 0's reached state) all succeed
+/// and reproduce it exactly (#728).
+fn round_trips(p: &mut EnvPool<Lanterns, Masked>, s: &LanternsState) {
+    let rec = p.snapshot(0).unwrap();
+    p.import(&[0], &[DecodedRecord::from(rec)]).unwrap();
+    assert_eq!(p.state(0).unwrap(), *s, "import");
+    p.restore(0, &rec).unwrap();
+    assert_eq!(p.state(0).unwrap(), *s, "restore");
+    p.fork(0, &[1]).unwrap();
+    assert_eq!(p.state(1).unwrap(), *s, "fork");
+}
+
+/// #728: once the deck is out, playing a middle slot leaves it empty (it is
+/// not refilled) while later slots still hold cards. The kernel reaches that
+/// hand; the validator must accept it and the record must round-trip.
+#[test]
+fn test_lanterns_validate_hole_after_deck_exhausted_round_trips() {
+    let players = 3usize;
+    let mut p = pool_n(3, 2, 5);
+    for _ in 0..400 {
+        let s = p.state(0).unwrap();
+        assert!(s.done == 0, "the game ended before a hole was made");
+        let mover = usize::from(s.to_move);
+        let masks: Vec<bool> = p
+            .outputs()
+            .unwrap()
+            .masks()
+            .iter()
+            .map(|b| b.get())
+            .collect();
+        let row = &masks[mover * ACTIONS as usize..(mover + 1) * ACTIONS as usize];
+        let a = if usize::from(s.next) == lanterns::DECK && row[0] {
+            0 // play slot 0: it is not refilled, slots 1.. keep their cards
+        } else {
+            (5..10)
+                .find(|&a| row[a])
+                .or_else(|| (10..ACTIONS as usize).find(|&a| row[a]))
+                .unwrap()
+        };
+        step_all(&mut p, 2, mover, u32::try_from(a).unwrap());
+        let t = p.state(0).unwrap();
+        if t.done == 0 && has_hole(&t, players) {
+            Lanterns::validate(&cfg(3), &t).unwrap();
+            round_trips(&mut p, &t);
+            return;
+        }
+    }
+    panic!("no hole was reached");
+}
+
+/// #728, as a property: random legal games for 2 to 5 players, played to
+/// the end; at every step the reached state imports, restores and forks.
+#[test]
+fn test_lanterns_random_games_every_reached_state_round_trips() {
+    let mut holes = 0usize;
+    for players in 2..=5u32 {
+        for seed in 0..6u64 {
+            let mut p = pool_n(players, 2, seed * 31 + u64::from(players));
+            let mut r = rng(seed + 1000);
+            for _ in 0..400 {
+                let s = p.state(0).unwrap();
+                if s.done != 0 || p.outputs().unwrap().episode_terminated()[0].get() {
+                    break;
+                }
+                round_trips(&mut p, &s);
+                holes += usize::from(has_hole(&s, players as usize));
+                let mover = usize::from(s.to_move);
+                let masks: Vec<bool> = p
+                    .outputs()
+                    .unwrap()
+                    .masks()
+                    .iter()
+                    .map(|b| b.get())
+                    .collect();
+                let row = &masks[mover * ACTIONS as usize..(mover + 1) * ACTIONS as usize];
+                // Discards drain the deck; random among legal otherwise.
+                let legal: Vec<u32> = (0..ACTIONS).filter(|&a| row[a as usize]).collect();
+                let discards: Vec<u32> = (5..10).filter(|&a| row[a as usize]).collect();
+                let pool_of =
+                    if discards.is_empty() || r.below_u32(NonZeroU32::new(4).unwrap()) == 0 {
+                        &legal
+                    } else {
+                        &discards
+                    };
+                let pick = pool_of[usize::try_from(
+                    r.below_u32(NonZeroU32::new(u32::try_from(pool_of.len()).unwrap()).unwrap()),
+                )
+                .unwrap()];
+                step_all(&mut p, 2, mover, pick);
+            }
+        }
+    }
+    assert!(holes > 0, "the property never reached a hand with a hole");
+}

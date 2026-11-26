@@ -791,8 +791,10 @@ impl ActionMask for Lanterns {
 }
 
 /// Imported states: the deck is the full deck; the drawn cards are exactly
-/// the cards in hands, discards and fireworks; hands hold cards in their
-/// first slots only (`hand_size` while the deck lasts); knowledge allows
+/// the cards in hands, discards and fireworks; while the deck lasts, each
+/// active seat holds cards in its first slots only; once the deck is out, a
+/// played or discarded slot stays empty and later slots keep their cards, so
+/// empty slots may appear anywhere in an active hand (#728); knowledge allows
 /// each held card's colour and rank and is empty for empty slots;
 /// counters are in range.
 impl Validate for Lanterns {
@@ -861,7 +863,10 @@ impl Validate for Lanterns {
                     }
                     continue;
                 }
-                if seat >= players || k >= cfg.hand_size() || empty {
+                // A card after an empty slot is only possible once the deck
+                // is out: refill leaves the slot empty then (#728).
+                if seat >= players || k >= cfg.hand_size() || (empty && usize::from(s.next) < DECK)
+                {
                     return invalid("a card in a slot that cannot hold one");
                 }
                 if card > NO_CARD
