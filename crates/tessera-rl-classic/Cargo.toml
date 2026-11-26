@@ -45,6 +45,11 @@ harness = false
 name = "cartpole_lane_stop"
 harness = false
 
+# GridLanes against Grid (ADR-0090 stage 2, #345): reported, no bar.
+[[bench]]
+name = "grid_lanes"
+harness = false
+
 # Instruction counts (gungraun, Linux only; ADR-0025).
 [[bench]]
 name = "classic_instructions"
