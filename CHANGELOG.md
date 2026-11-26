@@ -197,6 +197,7 @@ the API is not stable, and any 0.x release may break it.
   - CartPole lane columns convert by name, so the AVX2 path stays inlined (#335, #353);
   - the state hash is buffered, about 4x faster (#387, #398), and encodes numeric arrays in batches, 1.6x faster again (#387, #492), with identical bytes;
   - Go 9x9 compares superko history entries word by word, without `memcmp` under LTO (#611, #630).
+  - `tessera/Tag-v1` writes its observation window sparsely into the rows the engine has already zeroed, instead of building and copying a window sized for the largest radius; same bytes, environment version unchanged (#771).
   - `tessera/Grid-v1` and `tessera/GridLanes-v1` write their pixel observation sparsely: zero it, then light only the agent, the goal, the border and the walls, instead of three writes per cell; same bytes, environment versions unchanged (#751); they now write into the rows the engine has already zeroed, without zeroing them again;
   - the engine clears a one-agent instance's step rows (flags and reward) with direct stores instead of a fill call per buffer, which every reset, restore and fork does per instance; instances with several agents keep the span fills, at their earlier cost (#757).
   - `tessera/BrickWall-v1`'s pixel observation fills each row of the wall as runs of adjacent bricks, one fill per run and pixel row instead of one per brick (about 430 short fills per frame for a full wall); same bytes, environment version unchanged (#755).

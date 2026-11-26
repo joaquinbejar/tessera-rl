@@ -21,6 +21,7 @@
 //!   (the observer included).
 
 pub mod grid;
+mod window;
 
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
@@ -312,12 +313,13 @@ impl Environment for Tag {
         _: &mut ObsRng,
         out: &mut ObsWriter<'_, '_, TagObs>,
     ) {
-        let side = cfg.side();
-        let window = egocentric_window(cfg, state, agent.index());
+        // The rows are zero on entry (SPEC 10): only the nonzero bytes are
+        // written (#771). `egocentric_window` builds the same bytes for
+        // `info_state`.
         if let Some(mut leaf) = out.leaf_mut(TagObs::WINDOW) {
-            for (k, v) in window.iter().take(3 * side * side).enumerate() {
-                leaf.set(k, *v);
-            }
+            window::write_window(cfg, state, agent.index(), |k, v| {
+                leaf.set(k, v);
+            });
         }
     }
 }
