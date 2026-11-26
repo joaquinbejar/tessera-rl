@@ -760,13 +760,13 @@ mod tests {
 
     static TOYS: Registry<XlaEntry<Toy>> = Registry::new();
 
-    /// Serializes the tests that use `TOYS` (#737). They share one registry:
-    /// `open` claims each slot it scans and `call` claims a slot before its
-    /// generation check, so a test opening a handle or calling a closed one
-    /// can make another test's live slot `Busy` for a moment. That spurious
-    /// refusal can also reach a live step in production; its fix is tracked
-    /// separately, and this lock only isolates the tests. A test that fails
-    /// while holding the lock poisons it; the others still run.
+    /// Serializes the tests that use `TOYS` (#737). They share one registry,
+    /// which has a known registry race (open claims occupied slots; call
+    /// claims before its generation check; issue #738): a test opening a
+    /// handle, or calling a closed one, can make another test's live slot
+    /// `Busy` for a moment. This lock serializes the tests until that is
+    /// fixed. A test that fails while holding the lock poisons it; the others
+    /// still run.
     static TOYS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn toys_serial() -> std::sync::MutexGuard<'static, ()> {
