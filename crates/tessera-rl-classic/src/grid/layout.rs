@@ -209,7 +209,7 @@ pub(super) fn free_cells(cfg: &GridConfig) -> u32 {
 
 /// The goal: uniform over the free cells after the start, row-major. With
 /// no walls it is version 1's draw, cell `rng.below(n² - 1) + 1`.
-pub(super) fn goal(cfg: &GridConfig, rng: &mut StepRng) -> [i16; 2] {
+pub(crate) fn goal(cfg: &GridConfig, rng: &mut StepRng) -> [i16; 2] {
     let n = u32::from(cfg.size);
     let layout = cfg.layout.get();
     let others = core::num::NonZeroU32::new(free_cells(cfg)).unwrap_or(core::num::NonZeroU32::MIN);
@@ -229,7 +229,7 @@ pub(super) fn goal(cfg: &GridConfig, rng: &mut StepRng) -> [i16; 2] {
 
 /// The position after a move from `from` to `to`: a wall leaves the agent
 /// in place (game rule).
-pub(super) fn enter(cfg: &GridConfig, from: [Fx32; 2], to: [Fx32; 2]) -> [Fx32; 2] {
+pub(crate) fn enter(cfg: &GridConfig, from: [Fx32; 2], to: [Fx32; 2]) -> [Fx32; 2] {
     let wall = cfg
         .layout
         .get()
@@ -238,7 +238,7 @@ pub(super) fn enter(cfg: &GridConfig, from: [Fx32; 2], to: [Fx32; 2]) -> [Fx32; 
 }
 
 /// The third observation channel: the border of the grid and its walls.
-pub(super) fn border_or_wall(cfg: &GridConfig, col: i32, row: i32) -> bool {
+pub(crate) fn border_or_wall(cfg: &GridConfig, col: i32, row: i32) -> bool {
     let n = i32::from(cfg.size);
     let border = row == 0 || col == 0 || row == n - 1 || col == n - 1;
     border || cfg.layout.get().is_wall(col, row)

@@ -7,11 +7,11 @@ mod support;
 
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
-    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
+    GridLanes, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel,
+    PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::Persist;
-use tessera_rl_engine::{EnvPool, Masked, NoMasks};
+use tessera_rl_engine::{EnvPool, Masked, NoMasks, PoolOptions};
 
 #[test]
 fn test_persist_tag_continues_and_matches_its_fixture() {
@@ -49,6 +49,28 @@ fn test_persist_grid_continues_and_matches_its_fixture() {
     assert_eq!(
         <Grid as Persist>::ENV_VERSION,
         tessera_rl_classic::grid::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_grid_lanes_continues_and_matches_its_fixture() {
+    // A lane-wise pool needs `chunk_size % 8 == 0` (ADR-0090 4.7).
+    let build = |o: PoolOptions| {
+        let o = PoolOptions {
+            chunk_size: core::num::NonZeroU32::new(8).unwrap(),
+            ..o
+        };
+        EnvPool::<GridLanes, NoMasks>::new(GridConfig::default(), o).unwrap()
+    };
+    support::check_continuation(&build, 4);
+    support::check_fixture("persist-grid-lanes", env!("CARGO_MANIFEST_DIR"), &build, 4);
+    assert_eq!(
+        <GridLanes as Persist>::ENV_ID,
+        tessera_rl_classic::grid_lanes::ENV_ID
+    );
+    assert_eq!(
+        <GridLanes as Persist>::ENV_VERSION,
+        tessera_rl_classic::grid_lanes::ENV_VERSION
     );
 }
 
