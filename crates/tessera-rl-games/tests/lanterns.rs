@@ -563,12 +563,25 @@ fn pool_n(players: u32, n: u32, seed: u64) -> EnvPool<Lanterns, Masked> {
     p
 }
 
-/// Every slot of instance 0 moves together: the same actions go to all
-/// instances, so a pool of `n` keeps `n` identical games.
+/// Steps instance 0 with `action` for `mover`. Every other instance is its
+/// own game (each instance has its own deal), so its mover plays its first
+/// legal action (debug checks reject masked-out actions).
 fn step_all(p: &mut EnvPool<Lanterns, Masked>, n: usize, mover: usize, action: u32) {
     let mut a = vec![0i32; lanterns::MAX_AGENTS * n];
-    for i in 0..n {
-        a[i * lanterns::MAX_AGENTS + mover] = i32::try_from(action).unwrap();
+    a[mover] = i32::try_from(action).unwrap();
+    let masks: Vec<bool> = p
+        .outputs()
+        .unwrap()
+        .masks()
+        .iter()
+        .map(|b| b.get())
+        .collect();
+    let per = lanterns::MAX_AGENTS * ACTIONS as usize;
+    for i in 1..n {
+        let m = usize::from(p.state(u32::try_from(i).unwrap()).unwrap().to_move);
+        let row = &masks[i * per + m * ACTIONS as usize..i * per + (m + 1) * ACTIONS as usize];
+        let legal = (0..ACTIONS as usize).find(|&k| row[k]).unwrap();
+        a[i * lanterns::MAX_AGENTS + m] = i32::try_from(legal).unwrap();
     }
     p.step(ActionInput {
         discrete: &a,
@@ -589,7 +602,7 @@ fn has_hole(s: &LanternsState, players: usize) -> bool {
 /// and reproduce it exactly (#728).
 fn round_trips(p: &mut EnvPool<Lanterns, Masked>, s: &LanternsState) {
     let rec = p.snapshot(0).unwrap();
-    p.import(&[0], &[DecodedRecord::from(rec.clone())]).unwrap();
+    p.import(&[0], &[DecodedRecord::from(rec)]).unwrap();
     assert_eq!(p.state(0).unwrap(), *s, "import");
     p.restore(0, &rec).unwrap();
     assert_eq!(p.state(0).unwrap(), *s, "restore");
