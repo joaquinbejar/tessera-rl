@@ -90,6 +90,15 @@ def report(criterion: pathlib.Path, group: str, instances: int) -> tuple[list[st
     )
     if not rows:
         raise InputError(f"{gdir}: no cases")
+    # Every case of one environment declares the same record: a mismatch means
+    # a throughput declared over the wrong count (a one-record divisor alone
+    # accepts any byte count).
+    sizes: dict[str, set[int]] = {}
+    for r in rows:
+        sizes.setdefault(r["env"], set()).add(r["record_bytes"])
+    for env, s in sorted(sizes.items()):
+        if len(s) != 1:
+            raise InputError(f"{gdir}: {env} cases disagree on the record size {sorted(s)}")
     ok = True
     out = [
         f"group {group}, {instances} instances; bound = record bytes / 1024 us per record written (ADR-0010);"

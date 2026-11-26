@@ -109,9 +109,19 @@ def test_soa_bound_real_r4_snapshot_one_divides_by_one_record(tmp_path, capsys):
     assert "soa_cartpole/snapshot_one: record 88 B, median 28.2 ns [28.1, 28.3], bound 85.9 ns, report" in out
 
 
-def test_soa_bound_report_only_declared_over_all_instances_is_refused(tmp_path):
+def test_soa_bound_report_only_declared_over_all_instances_is_refused(tmp_path, capsys):
+    case(tmp_path, "g", "soa_cartpole/snapshot_all", 88, 4.0)
     case(tmp_path, "g", "soa_cartpole/state_hash", 88, 80.0, throughput={"Bytes": 88 * N})
     assert load().main([str(tmp_path), "--group", "g", "--instances", str(N)]) == 2
+    assert "disagree on the record size" in capsys.readouterr().err
+
+
+def test_soa_bound_cases_of_one_env_agree_on_record_size(tmp_path):
+    case(tmp_path, "g", "soa_cartpole/snapshot_all", 88, 4.0)
+    case(tmp_path, "g", "soa_cartpole/fork", 88, 40.0)
+    case(tmp_path, "g", "soa_cartpole/state_hash", 88, 80.0)
+    case(tmp_path, "g", "aos_cartpole/snapshot_all", 96, 4.0)
+    assert load().main([str(tmp_path), "--group", "g", "--instances", str(N)]) == 0
 
 
 def test_soa_bound_fork_declared_over_all_instances_is_refused(tmp_path):
