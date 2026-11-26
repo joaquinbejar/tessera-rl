@@ -40,6 +40,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -142,6 +143,33 @@ def _run(cmd) -> str:
         return "unknown"
 
 
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def _source() -> tuple[str, bool]:
+    """(commit, dirty) of the measured source. A git checkout answers
+    itself; a source without one (a ``git archive`` unpacked for a host run)
+    must carry ``.head`` at the root holding the full 40-hex SHA it was
+    archived from, and is clean by construction. Neither, a malformed
+    ``.head`` or one that disagrees with the checkout: ``RuntimeError``,
+    so no report is written with an unknown commit (#640)."""
+    head_file = ROOT / ".head"
+    head = head_file.read_text(encoding="utf-8").strip() if head_file.is_file() else None
+    if head is not None and not _SHA.fullmatch(head):
+        raise RuntimeError(f"{head_file} does not hold a full 40-hex SHA")
+    commit = _run(["git", "rev-parse", "HEAD"])
+    if _SHA.fullmatch(commit):
+        if head is not None and head != commit:
+            raise RuntimeError(f"{head_file} says {head} but the checkout is at {commit}")
+        status = _run(["git", "status", "--porcelain"])
+        if status == "unknown":
+            raise RuntimeError("git status failed in the checkout")
+        return commit, status != ""
+    if head is None:
+        raise RuntimeError(f"the commit is unknown: no git checkout at {ROOT} and no .head")
+    return head, False
+
+
 def _cpu_model() -> str:
     if sys.platform == "darwin":
         return _run(["sysctl", "-n", "machdep.cpu.brand_string"])
@@ -175,6 +203,7 @@ def environment(machine: str | None) -> dict:
     import tessera_rl
     from tessera_rl import _native
 
+    commit, dirty = _source()
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
     return {
         "machine": machine,
@@ -190,8 +219,8 @@ def environment(machine: str | None) -> dict:
         "software": {
             "tessera_rl": tessera_rl.__version__,
             "native_build_profile": _native.build_profile(),
-            "git": _run(["git", "rev-parse", "HEAD"]),
-            "git_dirty": bool(_run(["git", "status", "--porcelain"]) not in ("", "unknown")),
+            "git": commit,
+            "git_dirty": dirty,
             "rustc": _run(["rustc", "--version"]),
             "python": platform.python_version(),
             "numpy": np.__version__,

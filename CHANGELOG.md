@@ -195,6 +195,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- `tools/bench/bench.py` records the measured commit from a root `.head` file (the full 40-hex SHA) when the source is a `git archive` without a checkout, and refuses to run when neither exists, when `.head` is malformed or disagrees with the checkout, or when `git status` fails; reports no longer carry `"git": "unknown"`, which the dashboard judges invalid (#640).
 - Derive macros point their errors at the offending field (#365, #395), and `EnvState` reports a non-plain-data field type at that field only (#388, #461).
 - `tessera/Lanterns-v1`: importing a reached state no longer fails with "a card in a slot that cannot hold one" once the deck is out. A played or discarded slot stays empty then while later slots keep their cards, and the state validator now accepts that hand (#728, #640). Dynamics, rewards, observations, masks and termination are unchanged, so the environment version stays 1.
 - Python: the Gymnasium adapter gives single-head masked environments (Snake with `agents=1`) their mask in `info["action_mask"]` (`[N, n]` `int8`) and `info["action_masks"]`, (#477) as SPEC 11.3 says and multi-head environments already did; before, these keys were missing.

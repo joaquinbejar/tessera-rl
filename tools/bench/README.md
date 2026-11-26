@@ -17,7 +17,7 @@ make bench-kernels                # Criterion benches of the kernels
 | Piece | Role |
 | --- | --- |
 | `configs.toml` | The method (warm-up, repetitions, bootstrap) and the named configurations; derived metrics. |
-| `bench.py` | Runs the configurations and writes the report: statistics, machine, hardware, frequency policy, load, versions. |
+| `bench.py` | Runs the configurations and writes the report: statistics, machine, hardware, frequency policy, load, versions, and the measured commit (from the git checkout, or from a root `.head` holding the full SHA when the source is a `git archive`; it refuses to run without either). |
 | `tools/bench-runner` | Rust runner: raw samples for throughput, latency, snapshot costs and memory, as JSON. |
 | `crates/*/benches` | Criterion benches of the kernels (CartPole physics, classic pool steps, Sync-mode wait backends). |
 

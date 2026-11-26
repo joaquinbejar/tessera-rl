@@ -630,3 +630,53 @@ def test_bench_successful_runner_output_is_returned_unchanged(monkeypatch, capsy
     monkeypatch.setattr(bench.subprocess, "run", fake)
     assert bench._run_runner(["runner"]).stdout == "{}"
     assert capsys.readouterr().err == ""
+
+
+# -- source commit (#640) -------------------------------------------------------
+
+_A = "a" * 40
+_B = "b" * 40
+
+
+def _fake_git(monkeypatch, tmp_path, head=None, rev="unknown", status="unknown"):
+    monkeypatch.setattr(bench, "ROOT", tmp_path)
+    if head is not None:
+        (tmp_path / ".head").write_text(head + "\n", encoding="utf-8")
+    monkeypatch.setattr(bench, "_run", lambda cmd: {"rev-parse": rev, "status": status}.get(cmd[1], "unknown"))
+
+
+def test_source_archive_with_head_returns_head_clean(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_A)
+    assert bench._source() == (_A, False)
+
+
+def test_source_no_checkout_no_head_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="commit is unknown"):
+        bench._source()
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "A" * 40, _A + "0", "g" * 40])
+def test_source_malformed_head_raises(monkeypatch, tmp_path, bad):
+    _fake_git(monkeypatch, tmp_path, head=bad, rev=_A, status="")
+    with pytest.raises(RuntimeError, match="40-hex"):
+        bench._source()
+
+
+def test_source_checkout_returns_commit_and_dirty(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, rev=_A, status="")
+    assert bench._source() == (_A, False)
+    _fake_git(monkeypatch, tmp_path, rev=_A, status=" M x")
+    assert bench._source() == (_A, True)
+
+
+def test_source_head_disagreeing_with_checkout_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_B, rev=_A, status="")
+    with pytest.raises(RuntimeError, match="says"):
+        bench._source()
+
+
+def test_source_checkout_status_failure_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, rev=_A, status="unknown")
+    with pytest.raises(RuntimeError, match="git status failed"):
+        bench._source()
