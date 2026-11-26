@@ -3,11 +3,7 @@
 //! conversions (`i32::from`, and back in range).
 
 #![expect(clippy::indexing_slicing, reason = "test helpers over [_; 8]")]
-#![expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    reason = "generator words"
-)]
+#![expect(clippy::cast_possible_truncation, reason = "generator words")]
 
 use tessera_rl_num::math::lane_int::I32Lanes;
 use tessera_rl_simd::{LaneKernel, Lanes, Resolved};
