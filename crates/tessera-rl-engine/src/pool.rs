@@ -2246,7 +2246,9 @@ fn scalar_one<E: Environment, M: MaskProvider<E>>(
         |state, adaptive, identity, out| {
             let mut rng = StepRng::new(authority, identity, StreamId::DYNAMICS);
             match (agent_lanes, E::AGENT_LANE) {
-                (Some(level), Some(hook)) => hook(cfg, state, &view, &mut rng, out, level),
+                (Some(level), Some(hook)) => {
+                    hook(cfg, adaptive, state, &view, &mut rng, out, level);
+                }
                 _ => E::step_with(cfg, adaptive, state, &view, &mut rng, out),
             }
         },

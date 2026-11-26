@@ -14,16 +14,17 @@
 use tessera_rl_num::rng::StepRng;
 use tessera_rl_simd::Resolved;
 
-use crate::env::Environment;
+use crate::env::{Adaptive, Environment};
 use crate::io::Actions;
 use crate::step_out::StepOut;
 
 /// The engine's entry point for an agent-lane step: the parameters of
-/// [`Environment::step`] plus the pool's resolved SIMD level. It takes no
-/// adaptive values: an environment that reads them never takes the hook
-/// (ADR-0100 decision 1.5, erratum 2).
+/// [`Environment::step_with`] plus the pool's resolved SIMD level, last
+/// (ADR-0100 decision 1.5). An environment that reads its adaptive values
+/// never takes the hook, so a hook may ignore `adaptive`.
 pub type AgentLaneHook<E> = fn(
     &<E as Environment>::Config,
+    &Adaptive<E>,
     &mut <E as Environment>::State,
     &Actions<'_, <E as Environment>::Action>,
     &mut StepRng,

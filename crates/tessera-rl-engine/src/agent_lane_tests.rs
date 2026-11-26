@@ -63,6 +63,7 @@ const fn hooked(level: Level) -> u32 {
 
 fn hook(
     _: &UnitConfig,
+    _: &NoAdaptive,
     state: &mut Unit,
     _: &Actions<'_, ()>,
     _: &mut StepRng,
