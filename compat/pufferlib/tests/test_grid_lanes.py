@@ -33,7 +33,8 @@ def test_grid_lanes_puffer_rows_equal_a_grid_pool():
     s = ref.reset()
     rng = np.random.default_rng(2)
     for _ in range(80):
-        np.testing.assert_array_equal(obs, s.observations["pixels"].reshape((12, -1)))
+        # One leaf keeps its shape: (rows, 3, size, size).
+        np.testing.assert_array_equal(obs, s.observations["pixels"].reshape(obs.shape))
         actions = rng.integers(0, 4, size=12, dtype=np.int32)
         obs, rewards, terminals, truncations, *_ = env.step(actions)
         s = ref.step(actions.reshape((12, 1)))
