@@ -908,16 +908,7 @@ where
     /// decision 3); `None` past the pool.
     #[inline]
     pub(crate) fn state_at(&self, i: usize) -> Option<E::State> {
-        // The columns are padded to a multiple of 8: a padding row is no
-        // instance.
-        if i >= self.headers.len() {
-            return None;
-        }
-        if E::State::LANES {
-            <Fields<E> as LaneTuple>::get(&self.columns.0, i).map(E::State::from_fields)
-        } else {
-            self.states.get(i).copied()
-        }
+        state_in::<E>(self.headers.len(), &self.states, &self.columns.0, i)
     }
 
     /// Writes instance `i`'s state into either store (ADR-0090 decision 3);
@@ -1740,6 +1731,29 @@ pub(crate) type Fields<E> = <<E as Environment>::State as EnvState>::Fields;
 
 /// The column store of `E`'s state.
 pub(crate) type Columns<E> = <Fields<E> as LaneTuple>::Columns;
+
+/// Instance `i`'s state, by value, from either store of a pool of `len`
+/// instances (ADR-0090 decision 3): [`EnvPool::state_at`] over borrowed
+/// fields, for callers that hold another field of the pool mutably (the
+/// live watch). `None` past the pool.
+#[inline]
+pub(crate) fn state_in<E: Environment>(
+    len: usize,
+    states: &[E::State],
+    columns: &Columns<E>,
+    i: usize,
+) -> Option<E::State> {
+    // The columns are padded to a multiple of 8: a padding row is no
+    // instance.
+    if i >= len {
+        return None;
+    }
+    if E::State::LANES {
+        <Fields<E> as LaneTuple>::get(columns, i).map(E::State::from_fields)
+    } else {
+        states.get(i).copied()
+    }
+}
 
 /// A column store, shown by `Debug` without its rows.
 pub(crate) struct ColumnStore<C>(pub(crate) C);
