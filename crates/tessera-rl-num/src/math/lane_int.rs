@@ -223,44 +223,33 @@ pub trait I32Lanes: Copy {
     /// it fails a `debug_assert!` and, in release, keeps its low bits.
     #[inline(always)]
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "exact by contract (ADR-0100 D4); debug_assert checks the range"
-    )]
     fn to_i16(self) -> [i16; 8] {
         self.to_array().map(|v| {
             debug_assert!(i16::try_from(v).is_ok(), "lane {v} is outside i16");
-            v as i16
+            let [a, b, _, _] = v.to_le_bytes();
+            i16::from_le_bytes([a, b])
         })
     }
     /// The low 16 bits of each lane, as `u16`; exact in `u16`'s range, as
     /// [`I32Lanes::to_i16`].
     #[inline(always)]
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "exact by contract (ADR-0100 D4); debug_assert checks the range"
-    )]
     fn to_u16(self) -> [u16; 8] {
         self.to_array().map(|v| {
             debug_assert!(u16::try_from(v).is_ok(), "lane {v} is outside u16");
-            v as u16
+            let [a, b, _, _] = v.to_le_bytes();
+            u16::from_le_bytes([a, b])
         })
     }
     /// The low 8 bits of each lane, as `u8`; exact in `u8`'s range, as
     /// [`I32Lanes::to_i16`].
     #[inline(always)]
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "exact by contract (ADR-0100 D4); debug_assert checks the range"
-    )]
     fn to_u8(self) -> [u8; 8] {
         self.to_array().map(|v| {
             debug_assert!(u8::try_from(v).is_ok(), "lane {v} is outside u8");
-            v as u8
+            let [a, _, _, _] = v.to_le_bytes();
+            a
         })
     }
     /// `base[idx[i]]` zero-extended, per lane: a scalar gather at every
