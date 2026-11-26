@@ -148,18 +148,21 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 
 def _source() -> tuple[str, bool, str]:
     """(commit, dirty, git_source) of the measured source; git_source is
-    ``"checkout"`` or ``".head"``. A git checkout answers itself (a source
-    inside an outer work tree without its own ``.head`` takes that outer
-    tree's commit); a source without one (a ``git archive`` unpacked for a host run)
-    must carry ``.head`` at the root holding the full 40-hex SHA it was
-    archived from, and is clean by construction. Neither, a malformed
-    ``.head`` or one that disagrees with the checkout: ``RuntimeError``,
-    so no report is written with an unknown commit (#640)."""
+    ``"checkout"`` or ``".head"``. A git work tree whose top level is this
+    source's root answers itself, and a ``.head`` there must agree with it.
+    Any other source (a ``git archive`` unpacked for a host run, also one
+    unpacked inside an unrelated outer work tree, whose commit is never
+    taken) must carry ``.head`` at the root holding the full 40-hex SHA it
+    was archived from, and is clean by construction. No commit, a malformed
+    ``.head`` or one that disagrees with the checkout: ``RuntimeError``, so
+    no report is written with an unknown commit (#640)."""
     head_file = ROOT / ".head"
     head = head_file.read_text(encoding="utf-8").strip() if head_file.is_file() else None
     if head is not None and not _SHA.fullmatch(head):
         raise RuntimeError(f"{head_file} does not hold a full 40-hex SHA")
-    commit = _run(["git", "rev-parse", "HEAD"])
+    top = _run(["git", "rev-parse", "--show-toplevel"])
+    own = top != "unknown" and pathlib.Path(top).resolve() == ROOT.resolve()
+    commit = _run(["git", "rev-parse", "HEAD"]) if own else "unknown"
     if _SHA.fullmatch(commit):
         if head is not None and head != commit:
             raise RuntimeError(f"{head_file} says {head} but the checkout is at {commit}")
@@ -168,7 +171,7 @@ def _source() -> tuple[str, bool, str]:
             raise RuntimeError("git status failed in the checkout")
         return commit, status != "", "checkout"
     if head is None:
-        raise RuntimeError(f"the commit is unknown: no git checkout at {ROOT} and no .head")
+        raise RuntimeError(f"the commit is unknown: no git checkout rooted at {ROOT} and no .head")
     return head, False, ".head"
 
 

@@ -638,11 +638,16 @@ _A = "a" * 40
 _B = "b" * 40
 
 
-def _fake_git(monkeypatch, tmp_path, head=None, rev="unknown", status="unknown"):
+def _fake_git(monkeypatch, tmp_path, head=None, rev="unknown", status="unknown", top=None):
+    """``top`` is the work tree's top level: the source root when ``rev`` is a
+    commit, unless given."""
     monkeypatch.setattr(bench, "ROOT", tmp_path)
     if head is not None:
         (tmp_path / ".head").write_text(head + "\n", encoding="utf-8")
-    monkeypatch.setattr(bench, "_run", lambda cmd: {"rev-parse": rev, "status": status}.get(cmd[1], "unknown"))
+    if top is None:
+        top = str(tmp_path) if rev != "unknown" else "unknown"
+    answers = {("rev-parse", "--show-toplevel"): top, ("rev-parse", "HEAD"): rev, ("status", "--porcelain"): status}
+    monkeypatch.setattr(bench, "_run", lambda cmd: answers.get(tuple(cmd[1:]), "unknown"))
 
 
 def test_source_archive_with_head_returns_head_clean(monkeypatch, tmp_path):
@@ -697,3 +702,14 @@ def test_run_unknown_commit_raises_before_any_runner_call(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="commit is unknown"):
         bench.run(quick=True, profile="debug")
     assert calls == []
+
+
+def test_source_inside_outer_work_tree_without_head_raises(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, rev=_A, status="", top=str(tmp_path.parent))
+    with pytest.raises(RuntimeError, match="no git checkout rooted"):
+        bench._source()
+
+
+def test_source_inside_outer_work_tree_takes_head_not_outer_commit(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_B, rev=_A, status=" M x", top=str(tmp_path.parent))
+    assert bench._source() == (_B, False, ".head")
