@@ -760,6 +760,20 @@ mod tests {
 
     static TOYS: Registry<XlaEntry<Toy>> = Registry::new();
 
+    /// Serializes the tests that use `TOYS` (#737). They share one registry:
+    /// `open` claims each slot it scans and `call` claims a slot before its
+    /// generation check, so a test opening a handle or calling a closed one
+    /// can make another test's live slot `Busy` for a moment, which is the
+    /// registry's protocol, not a fault. A test that fails while holding the
+    /// lock poisons it; the others still run.
+    static TOYS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn toys_serial() -> std::sync::MutexGuard<'static, ()> {
+        TOYS_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     impl XlaHost for ToyHost {
         type Pool = Toy;
 
@@ -1023,6 +1037,7 @@ mod tests {
     #[cfg(feature = "test-hooks")]
     #[test]
     fn test_handler_success_path_does_not_allocate() {
+        let _serial = toys_serial();
         let h = open_toy();
         for token in 0..3 {
             let (code, _) = call(
@@ -1073,6 +1088,7 @@ mod tests {
 
     #[test]
     fn test_handler_step_advances_the_token_and_writes_outputs() {
+        let _serial = toys_serial();
         let h = open_toy();
         let (code, out) = call(
             Op::Step,
@@ -1100,6 +1116,7 @@ mod tests {
 
     #[test]
     fn test_handler_stale_or_replayed_token_is_refused_without_stepping() {
+        let _serial = toys_serial();
         let h = open_toy();
         assert_eq!(
             call(
@@ -1141,6 +1158,7 @@ mod tests {
 
     #[test]
     fn test_handler_refuses_closed_missing_attrs_and_bad_buffers() {
+        let _serial = toys_serial();
         let h = open_toy();
         TOYS.close(h);
         let pre = crate::xla::sys::ERROR_FAILED_PRECONDITION;
@@ -1195,6 +1213,7 @@ mod tests {
 
     #[test]
     fn test_handler_busy_env_guard_is_refused() {
+        let _serial = toys_serial();
         let inner = Inner::new(
             Box::new(Toy {
                 steps: 0,
@@ -1231,6 +1250,7 @@ mod tests {
     /// `Env` stays usable; closing the handle works.
     #[test]
     fn test_handler_panic_poisons_the_handle_and_frees_the_env() {
+        let _serial = toys_serial();
         let inner = Inner::new(
             Box::new(Toy {
                 steps: 0,
@@ -1273,6 +1293,7 @@ mod tests {
 
     #[test]
     fn test_handler_other_stages_do_nothing() {
+        let _serial = toys_serial();
         let h = open_toy();
         let (code, out) = call(
             Op::Step,
@@ -1292,6 +1313,7 @@ mod tests {
 
     #[test]
     fn test_handler_reset_takes_a_seed_and_returns_the_next_token() {
+        let _serial = toys_serial();
         let h = open_toy();
         let seed = [7u32, 0].iter().flat_map(|w| w.to_ne_bytes()).collect();
         let args = vec![
@@ -1347,6 +1369,7 @@ mod tests {
         ignore = "the boundary thunk is naked assembly and writes the FP control registers, outside Miri"
     )]
     fn test_handler_thunk_canonicalizes_hostile_controls() {
+        let _serial = toys_serial();
         let thunk = ThunkFn::<Handler>::of::<XlaStep<ToyHost>>().get();
         let _reset = ThunkFn::<Handler>::of::<XlaReset<ToyHost>>().get();
         for mode in [hostile::flush_to_zero, hostile::toward_zero] {
@@ -1383,6 +1406,7 @@ mod tests {
     /// refusal is recorded as the handle's last error.
     #[test]
     fn test_handler_refuses_bad_rank_null_dims_and_records_the_error() {
+        let _serial = toys_serial();
         let h = open_toy();
         let inv = crate::xla::sys::ERROR_INVALID_ARGUMENT;
         let mut neg = step_args(0, &[1]);
@@ -1408,6 +1432,7 @@ mod tests {
 
     #[test]
     fn test_handler_duplicate_attribute_is_refused() {
+        let _serial = toys_serial();
         let h = open_toy();
         let (code, _) = call_tweak(
             Op::Step,
