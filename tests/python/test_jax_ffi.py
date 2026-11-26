@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""tessera_rl.jax.ffi_handle: the experimental XLA FFI token path (ADR-0095),
+"""tessera_rl.jax.ffi_handle: the XLA FFI token path (ADR-0095),
 against the native API. The ADR-0031 design tests 2, 3, 4, 9 and 10 adapted
 to the token API, plus token refusals, equivalence and the refusals of the
 handle. CPU, x86-64 only (elsewhere the handle is refused)."""

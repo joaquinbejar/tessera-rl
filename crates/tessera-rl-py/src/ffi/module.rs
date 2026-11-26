@@ -355,7 +355,7 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
     FunctionRow::noargs::<XlaTargets>(
         c"_xla_targets",
-        c"_xla_targets($module, /)\n--\n\nThe XLA FFI handler capsules, {\"step\": ..., \"reset\": ...}. Experimental.",
+        c"_xla_targets($module, /)\n--\n\nThe XLA FFI handler capsules, {\"step\": ..., \"reset\": ...}.",
     ),
     FunctionRow::varargs::<XlaToken>(
         c"_xla_token",

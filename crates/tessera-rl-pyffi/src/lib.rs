@@ -71,7 +71,7 @@ pub mod ffi;
 
 pub mod errors;
 
-/// The XLA FFI path for JAX handles (ADR-0095), experimental.
+/// The XLA FFI path for JAX handles (ADR-0095).
 pub mod xla;
 
 /// Host protocol 1 (feature `host`).

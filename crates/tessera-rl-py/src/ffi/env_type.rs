@@ -144,7 +144,7 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<CloseM>(c"close", c"close($self, /)\n--\n\nFrees the pool."),
     MethodRow::noargs::<XlaOpenM>(
         c"_xla_open",
-        c"_xla_open($self, /)\n--\n\nRegisters this Env as an XLA FFI handle sharing its guard: (slot, generation). Experimental (tessera_rl.jax.ffi_handle).",
+        c"_xla_open($self, /)\n--\n\nRegisters this Env as an XLA FFI handle sharing its guard: (slot, generation) (tessera_rl.jax.ffi_handle).",
     ),
     MethodRow::varargs::<ResetM>(c"reset", c"reset($self, seed=None, ids=None, delivered=None, /)\n--\n\nreset(seed=None, ids=None)"),
     MethodRow::varargs::<StepM>(c"step", c"step($self, actions, /)\n--\n\nstep(actions: bytes of int32)"),

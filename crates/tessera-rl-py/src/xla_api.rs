@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The XLA FFI token path (ADR-0095), experimental: the safe host the
+//! The XLA FFI token path (ADR-0095): the safe host the
 //! handlers of `tessera_rl_pyffi::xla::handler` call, and the Python entry
 //! points of `tessera_rl.jax.ffi_handle`.
 //!
@@ -222,7 +222,7 @@ pub(crate) fn open<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
         return Err(error(
             g,
             Kind::Capability,
-            "the XLA FFI path is experimental and only enabled on x86-64 until it has native evidence on this architecture".to_owned(),
+            "the XLA FFI path is only enabled on x86-64 until it has native evidence on this architecture".to_owned(),
         ));
     }
     let refusal = inner.with(g, |ops| {

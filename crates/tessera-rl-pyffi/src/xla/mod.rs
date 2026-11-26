@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The XLA FFI path for JAX handles (ADR-0095), experimental. Audited
+//! The XLA FFI path for JAX handles (ADR-0095). Audited
 //! `unsafe` module (AGENTS.md).
 //!
 //! - `registry`: the fixed slot array that lets a handler, which runs on an

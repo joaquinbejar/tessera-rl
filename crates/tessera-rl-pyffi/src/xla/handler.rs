@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The XLA FFI handlers of the token path (ADR-0095), experimental.
+//! The XLA FFI handlers of the token path (ADR-0095).
 //!
 //! XLA calls a handler directly, on one of its threads, without the
 //! interpreter. The handler enters through the audited boundary thunk
