@@ -50,14 +50,14 @@ mod tests {
     fn run(len: usize, i: usize, agents: usize) -> ([Vec<Bool8>; 5], Vec<f32>) {
         let mut flags: [Vec<Bool8>; 5] = core::array::from_fn(|_| vec![T; len]);
         let mut rewards = vec![7.0f32; len];
-        let [a, b, c, d, e] = &mut flags;
+        let [terminated, truncated, died, spawned, invalid] = &mut flags;
         clear_agent_rows(
             [
-                a.as_mut_slice(),
-                b.as_mut_slice(),
-                c.as_mut_slice(),
-                d.as_mut_slice(),
-                e.as_mut_slice(),
+                terminated.as_mut_slice(),
+                truncated.as_mut_slice(),
+                died.as_mut_slice(),
+                spawned.as_mut_slice(),
+                invalid.as_mut_slice(),
             ],
             &mut rewards,
             i,
