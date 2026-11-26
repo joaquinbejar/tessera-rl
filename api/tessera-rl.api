@@ -10303,7 +10303,7 @@ type tessera_rl::core::LaneHook<E> = fn(&<E as tessera_rl_core::env::Environment
 type tessera_rl::core::env::Adaptive<E> = <<E as tessera_rl_core::env::Environment>::Header as tessera_rl_core::header::RecordLayout>::Adaptive
 type tessera_rl::core::lane_env::LaneGroup<'a, E> = <<<E as tessera_rl_core::env::Environment>::State as tessera_rl_core::env::EnvState>::Fields as tessera_rl_core::lane_field::LaneTuple>::Group<'a>
 type tessera_rl::core::lane_step::LaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, tessera_rl_simd::dispatch::Resolved, &mut [<E as tessera_rl_core::env::Environment>::State; 8], &[i32; 8], &mut tessera_rl_core::lane_step::LaneOut)
-type tessera_rl::num::fp::Control = u32
+type tessera_rl::num::fp::Control = <arch-dependent: u32 on x86_64, u64 on aarch64>
 type tessera_rl::num::math::lane_int::Fx32Mask<L> = <<L as tessera_rl_num::math::lane_int::Fx32Lanes>::Raw as tessera_rl_num::math::lane_int::I32Lanes>::Mask
 variant tessera_rl::core::AssetError::DecodedTooLarge { limit: usize }
 variant tessera_rl::core::AssetError::InputTooLarge { len: usize }
