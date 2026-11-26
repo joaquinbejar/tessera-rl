@@ -82,10 +82,16 @@ impl<E> Slot<E> {
     /// panic can never leave a slot busy forever.
     fn try_claim(&self) -> Option<Claim<'_, E>> {
         // Acquire: pairs with the Release in `Claim::drop`.
-        self.busy
+        let claim = self
+            .busy
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
-            .then(|| Claim(self))
+            .then(|| Claim(self));
+        #[cfg(all(test, not(tessera_xla_loom)))]
+        if claim.is_some() {
+            tests::after_claim();
+        }
+        claim
     }
 
     /// Runs `f` on the entry cell. The caller holds `busy`.
@@ -229,6 +235,80 @@ impl<E, const N: usize> Default for Registry<E, N> {
 #[cfg(all(test, not(tessera_xla_loom)))]
 mod tests {
     use super::{Handle, Registry, RegistryError};
+    use std::cell::RefCell;
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn FnMut()>;
+
+    std::thread_local! {
+        /// Runs on this thread right after any slot's `busy` is claimed, so a
+        /// test can act while a claim is held (#738). Taken out while it
+        /// runs, so the registry calls it makes do not re-enter it.
+        static AFTER_CLAIM: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn after_claim() {
+        let hook = AFTER_CLAIM.with(|h| h.borrow_mut().take());
+        if let Some(mut f) = hook {
+            f();
+            AFTER_CLAIM.with(|h| {
+                let mut h = h.borrow_mut();
+                if h.is_none() {
+                    *h = Some(f);
+                }
+            });
+        }
+    }
+
+    fn set_after_claim(f: impl FnMut() + 'static) {
+        AFTER_CLAIM.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+    }
+
+    fn clear_after_claim() {
+        AFTER_CLAIM.with(|h| *h.borrow_mut() = None);
+    }
+
+    /// #738: opening a handle never makes another handle's live slot busy.
+    /// The hook steps the live handle while `open` holds whatever claim it
+    /// takes; the step must never be refused `Busy`.
+    #[test]
+    fn test_registry_open_never_claims_an_occupied_slot() {
+        static R: Registry<u64, 2> = Registry::new();
+        static SEEN: Mutex<Vec<Result<u64, RegistryError>>> = Mutex::new(Vec::new());
+        let h0 = R.open(10).unwrap();
+        set_after_claim(move || {
+            let r = R.call(h0, |v| *v);
+            SEEN.lock().unwrap().push(r);
+        });
+        let h1 = R.open(20).unwrap();
+        clear_after_claim();
+        let seen = SEEN.lock().unwrap().clone();
+        assert!(!seen.contains(&Err(RegistryError::Busy)), "{seen:?}");
+        assert_eq!(R.call(h0, |v| *v), Ok(10));
+        assert_eq!(R.call(h1, |v| *v), Ok(20));
+    }
+
+    /// #738: a call on a closed handle never makes the slot's new entry
+    /// busy. The hook steps the live handle while the stale call holds
+    /// whatever claim it takes; the step must never be refused `Busy`.
+    #[test]
+    fn test_registry_stale_call_never_claims_a_reused_slot() {
+        static R: Registry<u64, 1> = Registry::new();
+        static SEEN: Mutex<Vec<Result<u64, RegistryError>>> = Mutex::new(Vec::new());
+        let stale = R.open(1).unwrap();
+        R.close(stale);
+        let live = R.open(2).unwrap();
+        assert_eq!(live.slot, stale.slot);
+        set_after_claim(move || {
+            let r = R.call(live, |v| *v);
+            SEEN.lock().unwrap().push(r);
+        });
+        assert_eq!(R.call(stale, |v| *v), Err(RegistryError::Closed));
+        clear_after_claim();
+        let seen = SEEN.lock().unwrap().clone();
+        assert!(!seen.contains(&Err(RegistryError::Busy)), "{seen:?}");
+        assert_eq!(R.call(live, |v| *v), Ok(2));
+    }
 
     #[test]
     fn test_registry_open_call_close_refuses_after_close() {
