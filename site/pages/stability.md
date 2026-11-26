@@ -84,7 +84,8 @@ The host protocols that a host wheel speaks to `tessera_rl`, protocols 1 and
 2 (SPEC 14.4), are stable from 1.0: a host wheel built against a protocol
 works with every 1.x release that supports it, and 1.0 supports both
 (ADR-0094 items 3 and 4). The Rust host API (`HostEnvironment`, `HostPool`,
-`HostSnapshot`, `export_host_env!`) and the `tessera-rl-pyffi` crate are
+`HostSnapshot`, `export_host_env!`, `register_host!`) and the
+`tessera-rl-pyffi` crate are
 outside the stable surface: a minor release may change them, with a
 CHANGELOG entry, so a host crate that rebuilds against a newer Tessera may
 need source changes. `tessera_rl.jax.ffi_handle` is not affected by this.

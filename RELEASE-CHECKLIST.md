@@ -24,6 +24,15 @@ reviewed tree: the frozen SHA.
       is a candidate break, to name in the CHANGELOG. The same for Python:
       `make py-api` is green, and `git diff <last tag> --
       api/tessera-rl-py.api` lists the stable Python surface's changes.
+- [ ] MSRV and Python floor (ADR-0094 item 6): the workspace `rust-version`
+      is at most 4 stable Rust releases behind the newest stable, and CI's
+      `msrv` job is green on the frozen SHA. A raise since the last tag is
+      allowed only in a minor or major release, with a CHANGELOG entry;
+      likewise a raise of the Python floor (`requires-python`, abi3).
+- [ ] Host protocols (ADR-0094 item 4): `PROTOCOLS` in
+      `python/tessera_rl/_host.py` still accepts every protocol a 1.x release
+      has supported (1 and 2 at 1.0), and `tests/format_fixtures.toml`'s host
+      protocol tests are green. Dropping one needs a major release.
 - [ ] The CHANGELOG heading carries the actual release date
       (`## [<version>] - <YYYY-MM-DD>`). If the release slips, the last PR before
       the freeze corrects it. Nothing changes the tree after the freeze.
