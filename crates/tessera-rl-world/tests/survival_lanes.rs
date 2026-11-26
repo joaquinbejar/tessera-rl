@@ -495,6 +495,11 @@ fn one_step(
 /// `s` pushed towards the rare rules: low stocks and health for the live
 /// agents, and every fifth live agent dead and due to respawn.
 fn stressed(s: &SurvivalState, seed: u64) -> SurvivalState {
+    fn set<T>(v: &mut [T], a: usize, value: T) {
+        if let Some(e) = v.get_mut(a) {
+            *e = value;
+        }
+    }
     let mut t = *s;
     for a in 0..t.agent_count() {
         if !t.is_alive(a) {
@@ -502,13 +507,17 @@ fn stressed(s: &SurvivalState, seed: u64) -> SurvivalState {
         }
         let key = seed ^ (u64::try_from(a).unwrap() << 12);
         if a % 5 == 4 {
-            t.alive[a] = Bool8::FALSE;
-            t.dead_for[a] = 2;
+            set(&mut t.alive, a, Bool8::FALSE);
+            set(&mut t.dead_for, a, 2);
             continue;
         }
-        t.food[a] = i16::try_from(below(key, 3)).unwrap();
-        t.water[a] = i16::try_from(below(key ^ 2, 3)).unwrap();
-        t.health[a] = 1 + i16::try_from(below(key ^ 3, 40)).unwrap();
+        set(&mut t.food, a, i16::try_from(below(key, 3)).unwrap());
+        set(&mut t.water, a, i16::try_from(below(key ^ 2, 3)).unwrap());
+        set(
+            &mut t.health,
+            a,
+            1 + i16::try_from(below(key ^ 3, 40)).unwrap(),
+        );
     }
     t
 }
@@ -535,9 +544,21 @@ fn test_survival_lanes_whole_step_on_stressed_states_equals_the_reference() {
             for t in 1..=12 {
                 let acts = random_actions(seed, t, 1);
                 let want = one_step(cfg, &s, &acts, seed + u64::from(t), None);
-                starved |= (0..s.agent_count())
-                    .any(|a| s.is_alive(a) && (s.food[a] <= 1 || s.water[a] <= 1));
-                kills |= (0..s.agent_count()).any(|a| want.0.kills[a] > s.kills[a]);
+                let n = s.agent_count();
+                starved |= s
+                    .food
+                    .iter()
+                    .zip(&s.water)
+                    .take(n)
+                    .enumerate()
+                    .any(|(a, (f, w))| s.is_alive(a) && (*f <= 1 || *w <= 1));
+                kills |= want
+                    .0
+                    .kills
+                    .iter()
+                    .zip(&s.kills)
+                    .take(n)
+                    .any(|(after, before)| after > before);
                 respawns |= want.2.iter().any(|r| r[1]);
                 for level in Resolved::available() {
                     let got = one_step(cfg, &s, &acts, seed + u64::from(t), Some(level));
