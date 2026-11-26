@@ -13,8 +13,13 @@
 //! - `open`: `occupied` compare-exchange `false -> true` (Acquire), the next
 //!   slot if held, so an occupied slot's `busy` is never touched; `busy`
 //!   claimed (Acquire), retried with a spin and then a yield (only a call
-//!   refusing a stale handle can hold it); the entry stored; `busy`
-//!   released (Release).
+//!   refusing a stale handle can hold it); if the cell already holds an
+//!   entry, the slot is left occupied and skipped (never overwritten);
+//!   otherwise the entry stored; `busy` released (Release).
+//!
+//! A handle is not a capability: handles are built from caller-supplied
+//! values (the FFI attributes, and Python integers for `_xla_close`), so
+//! every rule below holds for a handle `open` never issued.
 //! - A call: step 0, `generation` load (Acquire), refused on a mismatch
 //!   without claiming, so a stale handle never makes a reused slot busy;
 //!   step 1, `busy` compare-exchange `false -> true` (Acquire), refused if
@@ -200,7 +205,12 @@ impl<E, const N: usize> Registry<E, N> {
             }
             // Only a call refusing a stale handle can hold `busy` here.
             let _claim = slot.claim_waiting();
-            debug_assert!(slot.with_entry(|cell| cell.is_none()));
+            // Never overwrite, in any build: a slot whose cell holds an entry
+            // is in use whatever its flag says, so it stays occupied and is
+            // skipped (#738, second reader F1).
+            if slot.with_entry(|cell| cell.is_some()) {
+                continue;
+            }
             slot.with_entry(|cell| *cell = Some(entry));
             // Acquire: the generation a close of the previous entry bumped.
             let generation = slot.generation.load(Ordering::Acquire);
@@ -403,6 +413,47 @@ mod tests {
         let h = opener.join().unwrap().unwrap();
         assert_eq!(h.slot, 0);
         assert_eq!(R.call(h, |v| *v), Ok(5));
+    }
+
+    /// #738 (second reader F1), the reader's sequence, made deterministic:
+    /// a forged close (matching the free slot's generation) holds `busy`
+    /// (in the hook) while an `open` has set `occupied` and waits; the close
+    /// takes nothing and must not clear `occupied`. Afterwards the slot
+    /// holds the opened entry, is still marked occupied, and a second open
+    /// finds no slot.
+    #[test]
+    fn test_registry_forged_close_racing_open_keeps_the_slot_occupied() {
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        static R: Registry<u64, 1> = Registry::new();
+        let forged = Handle {
+            slot: 0,
+            generation: 0,
+        };
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let closer = std::thread::spawn(move || {
+            set_after_claim(move || {
+                held_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+            });
+            R.close(forged);
+            clear_after_claim();
+        });
+        held_rx.recv().unwrap();
+        let opener = std::thread::spawn(|| R.open(7).map_err(|(_, e)| e));
+        while !R.slots[0].occupied.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        go_tx.send(()).unwrap();
+        closer.join().unwrap();
+        let h = opener.join().unwrap().unwrap();
+        assert!(
+            R.slots[0].occupied.load(Ordering::Acquire),
+            "a slot holding an entry is marked free"
+        );
+        assert_eq!(R.call(h, |v| *v), Ok(7));
+        assert_eq!(R.open(8).unwrap_err(), (8, RegistryError::Full));
     }
 
     /// #738 (second reader F1): a close with a handle built from values that
