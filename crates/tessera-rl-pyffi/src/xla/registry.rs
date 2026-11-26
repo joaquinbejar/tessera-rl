@@ -15,11 +15,11 @@
 //!   claimed (Acquire), retried with a spin and then a yield (only a call
 //!   refusing a stale handle can hold it); the entry stored; `busy`
 //!   released (Release).
-//! - A call: `generation` load (Acquire), refused on a mismatch without
-//!   claiming, so a stale handle never makes a reused slot busy; `busy`
-//!   compare-exchange `false -> true` (Acquire), refused if held;
-//!   `generation` loaded again (Acquire), refused and released on a
-//!   mismatch; use the entry; `busy` store `false` (Release).
+//! - A call: step 0, `generation` load (Acquire), refused on a mismatch
+//!   without claiming, so a stale handle never makes a reused slot busy;
+//!   step 1, `busy` compare-exchange `false -> true` (Acquire), refused if
+//!   held; step 2, `generation` loaded again (Acquire), refused and released
+//!   on a mismatch; use the entry; `busy` store `false` (Release).
 //! - `close`: `generation` bumped from the handle's value (AcqRel), a no-op
 //!   if another close already bumped it; `busy` claimed by compare-exchange
 //!   (Acquire), retried with a spin and then a yield; the entry taken;
@@ -27,12 +27,11 @@
 //!   (Release).
 //!
 //! `Busy` therefore means another call, or a close, holds this handle's
-//! slot, or a call that was admitted against the previous entry while it
-//! was being closed is refusing (#738).
-//!
-//! The entry is dropped only while `close` holds `busy`, whose acquiring
-//! compare-exchange synchronizes with the releasing store of the last call
-//! that held it, so every use happens before the drop.
+//! slot. One residual (#738): a call on a handle that passes step 0 just
+//! before a concurrent close of that same handle, and claims `busy` after
+//! the slot was reopened, refuses at step 2, and while it holds `busy` a
+//! call on the new entry can be refused `Busy`. It needs a call racing the
+//! close of its own handle, and it lasts one generation load.
 
 #![expect(
     unsafe_code,
