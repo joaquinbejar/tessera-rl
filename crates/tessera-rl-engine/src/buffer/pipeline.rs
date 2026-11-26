@@ -469,9 +469,11 @@ impl<E: Environment, M: MaskProvider<E>> HalfToken<E, M> {
         // invariants: the columns live in the moved pool and are never
         // reallocated while a token exists (invariant 1: any writer rebuilds
         // the raw parts first), and this token holds row `i`'s half
-        // exclusively, so no worker writes it (invariants 3 and 4). The read
-        // creates no reference, so it is sound beside the shared views this
-        // token hands out.
+        // exclusively, so no worker writes it (invariants 3 and 4). No `&mut`
+        // of the columns was created since the raw parts were taken: a
+        // writer through `Arc::get_mut` rebuilds them first (invariant 1),
+        // and a token's views are shared, never `&mut` (module docs). The
+        // read creates no reference, so it is sound beside those views.
         let fields =
             unsafe { <crate::pool::Fields<E> as LaneTuple>::read(self.mode.raw.columns, i) };
         fields.map(E::State::from_fields)
