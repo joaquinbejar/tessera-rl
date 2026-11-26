@@ -18,20 +18,24 @@
 //! - A call: step 0, `generation` load (Acquire), refused on a mismatch
 //!   without claiming, so a stale handle never makes a reused slot busy;
 //!   step 1, `busy` compare-exchange `false -> true` (Acquire), refused if
-//!   held; step 2, `generation` loaded again (Acquire), refused and released
-//!   on a mismatch; use the entry; `busy` store `false` (Release).
-//! - `close`: `generation` bumped from the handle's value (AcqRel), a no-op
-//!   if another close already bumped it; `busy` claimed by compare-exchange
-//!   (Acquire), retried with a spin and then a yield; the entry taken;
-//!   `occupied` store `false` (Release); the entry dropped; `busy` released
-//!   (Release).
+//!   held, as closed if a reloaded `generation` no longer matches and as busy
+//!   otherwise; step 2, `generation` loaded again (Acquire), refused and
+//!   released on a mismatch; use the entry; `busy` store `false` (Release).
+//! - `close`: `generation` compare-exchange from the handle's value to the
+//!   next (AcqRel; Relaxed on failure), returning if it fails (idempotent; a
+//!   stale handle does nothing); `busy` claimed (Acquire), retried with a
+//!   spin and then a yield; the entry taken; if there was one, `occupied`
+//!   store `false` (Release); the entry dropped; `busy` released (Release).
+//!   Handles reach `close` from Python (`_xla_close(slot, generation)`), so a
+//!   handle need not have been issued by `open`: one that matches a free
+//!   slot's generation only bumps it.
 //!
-//! `Busy` therefore means another call, or a close, holds this handle's
-//! slot. One residual (#738): a call on a handle that passes step 0 just
-//! before a concurrent close of that same handle, and claims `busy` after
-//! the slot was reopened, refuses at step 2, and while it holds `busy` a
-//! call on the new entry can be refused `Busy`. It needs a call racing the
-//! close of its own handle, and it lasts one generation load.
+//! `Busy` therefore means another call holds this handle's slot. Residual
+//! (#738): a call that passed step 0 before a close's bump may still be
+//! refused `Busy` while its own handle's close holds the slot and the
+//! reload still matches, or, for a stale handle, it may hold the reused
+//! slot's `busy` for the instant before it refuses `Closed`, refusing a call
+//! on the new entry `Busy`. Neither touches an entry.
 
 #![expect(
     unsafe_code,
@@ -221,6 +225,11 @@ impl<E, const N: usize> Registry<E, N> {
             return Err(RegistryError::Closed);
         }
         let Some(_claim) = slot.try_claim() else {
+            // A close of this handle may hold the slot: report it as closed
+            // rather than busy when the generation has moved on.
+            if slot.generation.load(Ordering::Acquire) != handle.generation {
+                return Err(RegistryError::Closed);
+            }
             return Err(RegistryError::Busy);
         };
         // Again under the claim: a close may have bumped it in between.
@@ -243,7 +252,7 @@ impl<E, const N: usize> Registry<E, N> {
         // sees the new generation.
         if slot
             .generation
-            .compare_exchange(handle.generation, next, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(handle.generation, next, Ordering::AcqRel, Ordering::Relaxed)
             .is_err()
         {
             return;
@@ -251,8 +260,16 @@ impl<E, const N: usize> Registry<E, N> {
         let _claim = slot.claim_waiting();
         let entry = slot.with_entry(Option::take);
         // Release: the slot is free for `open` once the entry is out; `open`
-        // still waits for `busy`, so the drop below finishes first.
-        slot.occupied.store(false, Ordering::Release);
+        // still waits for `busy`, so the drop below finishes first. Only a
+        // close that took an entry frees the slot: a handle built from
+        // caller-supplied values (`_xla_close(slot, generation)` is reachable
+        // from Python) whose generation matches a free slot, or a slot an
+        // `open` is still filling, takes nothing and leaves `occupied` as it
+        // is, so it never marks a slot free that holds, or will hold, an
+        // entry (#738, second reader F1).
+        if entry.is_some() {
+            slot.occupied.store(false, Ordering::Release);
+        }
         drop(entry);
     }
 
@@ -347,6 +364,81 @@ mod tests {
         let seen = SEEN.lock().unwrap().clone();
         assert!(!seen.contains(&Err(RegistryError::Busy)), "{seen:?}");
         assert_eq!(R.call(live, |v| *v), Ok(2));
+    }
+
+    /// #738 (second reader F4): `open` waits for a stale call's claim on a
+    /// free slot instead of storing under it. A thread holds the claim
+    /// (in the hook) of a call with a handle that matches the free slot's
+    /// generation; an `open` on another thread cannot finish until the claim
+    /// is released, and then registers in that slot.
+    #[test]
+    fn test_registry_open_waits_for_a_stale_claim() {
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        static R: Registry<u64, 1> = Registry::new();
+        let forged = Handle {
+            slot: 0,
+            generation: 0,
+        };
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            set_after_claim(move || {
+                held_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+            });
+            let r = R.call(forged, |v| *v);
+            clear_after_claim();
+            r
+        });
+        held_rx.recv().unwrap();
+        let opener = std::thread::spawn(|| R.open(5).map_err(|(_, e)| e));
+        while !R.slots[0].occupied.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!opener.is_finished(), "open stored while a claim was held");
+        go_tx.send(()).unwrap();
+        assert_eq!(holder.join().unwrap(), Err(RegistryError::Closed));
+        let h = opener.join().unwrap().unwrap();
+        assert_eq!(h.slot, 0);
+        assert_eq!(R.call(h, |v| *v), Ok(5));
+    }
+
+    /// #738 (second reader F1): a close with a handle built from values that
+    /// match a free slot's generation (reachable from Python through
+    /// `_xla_close`) takes nothing and does not free the slot for a second
+    /// entry.
+    #[test]
+    fn test_registry_forged_close_of_a_free_slot_frees_nothing() {
+        let r: Registry<u64, 1> = Registry::new();
+        r.close(Handle {
+            slot: 0,
+            generation: 0,
+        });
+        let h = r.open(1).unwrap();
+        assert_eq!(h.generation, 1);
+        assert_eq!(r.open(2).unwrap_err(), (2, RegistryError::Full));
+        assert_eq!(r.call(h, |v| *v), Ok(1));
+    }
+
+    /// A call made while its own handle's close holds the slot reports
+    /// `Closed`, not `Busy` (here through step 0: the close's bump came
+    /// first). The reload after a failed claim covers a call that passed
+    /// step 0 before the bump; the loom models accept either refusal there.
+    #[test]
+    fn test_registry_call_during_its_close_reports_closed() {
+        static R: Registry<u64, 1> = Registry::new();
+        static SEEN: Mutex<Vec<Result<u64, RegistryError>>> = Mutex::new(Vec::new());
+        let h = R.open(4).unwrap();
+        set_after_claim(move || {
+            let r = R.call(h, |v| *v);
+            SEEN.lock().unwrap().push(r);
+        });
+        R.close(h);
+        clear_after_claim();
+        let seen = SEEN.lock().unwrap().clone();
+        assert_eq!(seen, vec![Err(RegistryError::Closed)]);
     }
 
     #[test]
@@ -527,6 +619,67 @@ mod loom_model {
             assert_ne!(h1.generation, h0.generation);
             assert_eq!(step_n(&r, h1), Ok(1));
             assert_eq!(step_n(&r, h0), Err(RegistryError::Closed));
+        });
+    }
+
+    /// #738 (second reader F4): a call on the old handle racing its close
+    /// and a reopen of the same slot. The old call completes or refuses;
+    /// the new handle's step completes or is refused busy for the instant the
+    /// old call holds the slot; the old pool's drop never races the new
+    /// pool's store (loom's cell tracking).
+    #[test]
+    fn test_registry_loom_old_call_against_close_and_reopen() {
+        loom::model(|| {
+            let r = Arc::new(Registry::<Pool, 1>::new());
+            let h0 = r.open(pool()).map_err(|_| ()).unwrap();
+            let stepper = {
+                let r = Arc::clone(&r);
+                thread::spawn(move || step_n(&r, h0))
+            };
+            r.close(h0);
+            let h1 = r.open(pool()).map_err(|_| ()).unwrap();
+            match step_n(&r, h1) {
+                Ok(1) | Err(RegistryError::Busy) => {}
+                other => panic!("new handle: {other:?}"),
+            }
+            match stepper.join().unwrap() {
+                Ok(1) | Err(RegistryError::Closed | RegistryError::Busy) => {}
+                other => panic!("old handle: {other:?}"),
+            }
+        });
+    }
+
+    /// #738 (second reader F1): a close with a forged handle matching a free
+    /// slot's generation, racing an open, never frees the slot the open
+    /// fills: afterwards the slot holds the opened entry and a second open
+    /// finds no slot.
+    #[test]
+    fn test_registry_loom_forged_close_against_open() {
+        loom::model(|| {
+            let r = Arc::new(Registry::<Pool, 1>::new());
+            let forged = super::Handle {
+                slot: 0,
+                generation: 0,
+            };
+            let closer = {
+                let r = Arc::clone(&r);
+                thread::spawn(move || r.close(forged))
+            };
+            let h = r.open(pool()).map_err(|_| ()).unwrap();
+            closer.join().unwrap();
+            // The forged close either bumped the free slot before the open
+            // read its generation, or closed the issued handle (it then
+            // matches it exactly); it never frees a slot holding an entry.
+            match step_n(&r, h) {
+                Ok(1) => {
+                    assert!(r.open(pool()).is_err(), "a second entry in an occupied slot");
+                }
+                Err(RegistryError::Closed) => {
+                    let h2 = r.open(pool()).map_err(|_| ()).unwrap();
+                    assert_eq!(step_n(&r, h2), Ok(1));
+                }
+                other => panic!("{other:?}"),
+            }
         });
     }
 
