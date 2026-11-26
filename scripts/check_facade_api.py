@@ -80,6 +80,24 @@ MEMBERS = (
 )
 
 # Auto traits whose loss breaks users; other synthetic impls are noise.
+# Public type aliases whose target differs by architecture (#730): rendered
+# as one stable token, so a single reviewed snapshot holds on every target.
+# Only the listed paths, and only when they resolve to one of the listed
+# types: anything else renders as is, so an unexpected target shows in the
+# diff (fail closed).
+ARCH_ALIASES = {
+    "tessera_rl::num::fp::Control": (("u32", "u64"), "<arch-dependent: u32 on x86_64, u64 on aarch64>"),
+}
+
+
+def alias_target(path: str, rendered: str) -> str:
+    """The snapshot text for type alias `path`, whose target renders as `rendered`."""
+    entry = ARCH_ALIASES.get(path)
+    if entry is not None and rendered in entry[0]:
+        return entry[1]
+    return rendered
+
+
 AUTO_TRAITS = ("Send", "Sync", "Unpin", "UnwindSafe", "RefUnwindSafe")
 
 
@@ -439,7 +457,7 @@ class Walker:
                     self.assoc(crate, f"{path}::{ti['name']}", ti, trait=True)
         elif kind == "type_alias":
             gen, where = self.p.generics(v.get("generics"))
-            self.emit(f"type {path}{gen} = {self.p.ty(v['type'])}{where}", path)
+            self.emit(f"type {path}{gen} = {alias_target(path, self.p.ty(v['type']))}{where}", path)
         elif kind == "constant":
             self.emit(f"const {path}: {self.p.ty(v['type'])}", path)
         elif kind == "static":

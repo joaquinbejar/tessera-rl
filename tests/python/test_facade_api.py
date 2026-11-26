@@ -144,3 +144,24 @@ def test_facade_api_lost_auto_trait_changes_the_snapshot(api, docs):
         impls.remove(i)
     lost = base - lines(api, mutated).lines
     assert any("core::marker::Send for tessera_rl_num::identity::Seed" in line for line in lost), lost
+
+
+def test_facade_api_arch_alias_listed_types_render_one_token(api):
+    token = api.ARCH_ALIASES["tessera_rl::num::fp::Control"][1]
+    for ty in ("u32", "u64"):
+        assert api.alias_target("tessera_rl::num::fp::Control", ty) == token
+
+
+def test_facade_api_arch_alias_unexpected_type_shows_it(api):
+    # Fail closed: a target outside the listed ones is not hidden.
+    assert api.alias_target("tessera_rl::num::fp::Control", "u16") == "u16"
+
+
+def test_facade_api_unlisted_alias_shows_its_type(api):
+    assert api.alias_target("tessera_rl::num::probe::Other", "u64") == "u64"
+    assert api.alias_target("tessera_rl::num::fp::Control2", "u32") == "u32"
+
+
+def test_facade_api_control_alias_renders_the_token_from_rustdoc(api, docs):
+    token = api.ARCH_ALIASES["tessera_rl::num::fp::Control"][1]
+    assert f"type tessera_rl::num::fp::Control = {token}" in lines(api, docs).lines
