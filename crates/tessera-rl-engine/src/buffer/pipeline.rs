@@ -446,10 +446,35 @@ impl<E: Environment, M: MaskProvider<E>> HalfToken<E, M> {
         self.view(&self.mode.raw.headers, 1)
     }
 
-    /// The half's states, `[half]` (the `debug-checks` NaN trap, and the
-    /// live-watch boundary, ADR-0083 item 7).
+    /// The half's state rows, `[half]`; empty for a lane-wise state, whose
+    /// fields live in columns (ADR-0090): read a state through
+    /// [`Self::state_at`].
     pub(crate) fn states(&self) -> &[E::State] {
         self.view(&self.mode.raw.states, 1)
+    }
+
+    /// Row `k` of the half's state, by value, from either store (ADR-0090
+    /// decision 3): the `debug-checks` NaN trap and the live-watch boundary
+    /// (ADR-0083 item 7) read through it. `None` past the half.
+    pub(crate) fn state_at(&self, k: usize) -> Option<E::State> {
+        use tessera_rl_core::EnvState;
+        use tessera_rl_core::lane_field::LaneTuple;
+        if !E::State::LANES {
+            return self.states().get(k).copied();
+        }
+        let r = self.range();
+        let i = r.start.checked_add(k).filter(|&i| i < r.end)?;
+        #[expect(unsafe_code, reason = "audited module: token-guarded views")]
+        // SAFETY: `LaneTuple::read`'s contract, from this module's
+        // invariants: the columns live in the moved pool and are never
+        // reallocated while a token exists (invariant 1: any writer rebuilds
+        // the raw parts first), and this token holds row `i`'s half
+        // exclusively, so no worker writes it (invariants 3 and 4). The read
+        // creates no reference, so it is sound beside the shared views this
+        // token hands out.
+        let fields =
+            unsafe { <crate::pool::Fields<E> as LaneTuple>::read(self.mode.raw.columns, i) };
+        fields.map(E::State::from_fields)
     }
 
     /// The step counter of instance `id` (episode index, step index), if

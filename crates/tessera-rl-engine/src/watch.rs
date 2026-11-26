@@ -108,20 +108,22 @@ impl Drop for Watch {
     }
 }
 
-/// Encodes instance `id`'s record from row slices that start at `first`.
-/// False if `id` is outside them.
+/// Encodes instance `id`'s record from header rows that start at `first`
+/// and `state(k)`, the state of row `k` from either store (ADR-0090
+/// decision 3: a lane-wise state has no rows). False if `id` is outside
+/// them.
 pub(crate) fn encode_rows<E: Environment>(
     headers: &[E::Header],
-    states: &[E::State],
     first: u32,
     id: u32,
     buf: &mut [u8],
+    state: impl FnOnce(usize) -> Option<E::State>,
 ) -> bool {
     let Some(k) = id.checked_sub(first).and_then(|k| usize::try_from(k).ok()) else {
         return false;
     };
-    match (headers.get(k), states.get(k)) {
-        (Some(header), Some(state)) => encode_parts_into::<E>(header, state, buf),
+    match (headers.get(k), state(k)) {
+        (Some(header), Some(state)) => encode_parts_into::<E>(header, &state, buf),
         _ => false,
     }
 }
@@ -171,6 +173,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             watch,
             headers,
             states,
+            columns,
             poisoned,
             ..
         } = self;
@@ -180,7 +183,9 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
                 return;
             }
             let keep = w.boundary(*poisoned, |id, buf| {
-                encode_rows::<E>(headers, states, 0, id, buf)
+                encode_rows::<E>(headers, 0, id, buf, |k| {
+                    crate::pool::state_in::<E>(headers.len(), states, &columns.0, k)
+                })
             });
             if !keep {
                 *watch = None;

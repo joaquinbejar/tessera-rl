@@ -941,7 +941,7 @@ where
         };
         let keep = if let Some(t) = token {
             w.boundary(poisoned, |id, buf| {
-                encode_rows::<E>(t.headers(), t.states(), t.ids().start, id, buf)
+                encode_rows::<E>(t.headers(), t.ids().start, id, buf, |k| t.state_at(k))
             })
         } else {
             w.refused(poisoned);
@@ -1144,7 +1144,12 @@ where
         let a = E::MAX_AGENTS.max(1);
         let first = token.ids().start;
         let rewards = token.rewards();
-        for (k, state) in token.states().iter().enumerate() {
+        // Through `state_at`: a lane-wise state has no rows (ADR-0090).
+        for k in 0..token.ids().len() {
+            let Some(state) = token.state_at(k) else {
+                continue;
+            };
+            let state = &state;
             let row = rewards.get(k * a..(k + 1) * a).unwrap_or(&[]);
             let id = u32::try_from(k)
                 .ok()

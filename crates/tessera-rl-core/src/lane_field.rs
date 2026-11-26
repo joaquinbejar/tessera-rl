@@ -74,6 +74,30 @@ impl<T> RawColumn<T> {
         // caller guarantees no other live view overlaps `r`.
         unsafe { core::slice::from_raw_parts_mut(first, end - start) }
     }
+
+    /// A copy of row `i`, or `None` past the column. Reads through the raw
+    /// pointer and creates no reference, so it may run while shared views
+    /// of other rows, or reads of the same row, are live.
+    ///
+    /// # Safety
+    ///
+    /// The column is alive and not reallocated, and no write to row `i`
+    /// runs concurrently.
+    #[expect(unsafe_code, reason = "audited module: disjoint column views")]
+    unsafe fn read(self, i: usize) -> Option<T>
+    where
+        T: Copy,
+    {
+        if i >= self.len {
+            return None;
+        }
+        // SAFETY: `i < len`, so the offset stays inside the live column.
+        let row = unsafe { self.ptr.add(i) };
+        // SAFETY: `row` points at an initialized `T` of the live column
+        // (every row is filled at construction), properly aligned (an
+        // element of a `Vec<T>`); the caller guarantees no concurrent write.
+        Some(unsafe { row.read() })
+    }
 }
 
 /// A tuple of lane field types, stored as one column per element.
@@ -127,6 +151,19 @@ pub trait LaneTuple: Copy + Send + Sync + 'static + crate::sealed::LaneTupleSeal
     #[expect(unsafe_code, reason = "audited module: disjoint column views")]
     unsafe fn view<'a>(raw: Self::Raw, r: &Range<usize>) -> Self::View<'a>;
 
+    /// Instance `i`'s fields read through the raw column pointers, or
+    /// `None` past the columns. Called only by the engine's audited buffer
+    /// module, to gather a state the caller's token owns without creating a
+    /// view; not part of the API.
+    ///
+    /// # Safety
+    ///
+    /// The columns `raw` was taken from are alive and not reallocated, and
+    /// no write to row `i` of any column runs concurrently.
+    #[doc(hidden)]
+    #[expect(unsafe_code, reason = "audited module: disjoint column views")]
+    unsafe fn read(raw: Self::Raw, i: usize) -> Option<Self>;
+
     /// The fields of row `i` of a view, or `None` past it.
     fn view_get(view: &Self::View<'_>, i: usize) -> Option<Self>;
 
@@ -168,6 +205,11 @@ impl LaneTuple for () {
         reason = "audited module: trait method, no unsafe operation"
     )]
     unsafe fn view<'a>((): Self::Raw, _: &Range<usize>) -> Self::View<'a> {}
+
+    #[expect(unsafe_code, reason = "audited module: disjoint column views")]
+    unsafe fn read((): Self::Raw, _: usize) -> Option<Self> {
+        None
+    }
 
     fn view_get((): &Self::View<'_>, _: usize) -> Option<Self> {
         Some(())
@@ -236,6 +278,14 @@ macro_rules! field_tuple {
                 ($(unsafe { raw.$i.view(r) },)+)
             }
 
+            #[expect(unsafe_code, reason = "audited module: disjoint column views")]
+            unsafe fn read(raw: Self::Raw, i: usize) -> Option<Self> {
+                // SAFETY: each column is alive and not reallocated, and no
+                // write to row `i` runs concurrently (this function's
+                // contract).
+                Some(($(unsafe { raw.$i.read(i) }?,)+))
+            }
+
             fn view_get(view: &Self::View<'_>, i: usize) -> Option<Self> {
                 Some(($(*view.$i.get(i)?,)+))
             }
@@ -291,6 +341,27 @@ mod tests {
         assert_eq!(<F as LaneTuple>::get(&c, 16), None);
         <F as LaneTuple>::set(&mut c, 99, (9.0, 9, 9));
         assert_eq!(<F as LaneTuple>::get(&c, 15), Some((0.0, 0, 0)));
+    }
+
+    #[test]
+    #[expect(unsafe_code, reason = "test of the audited raw read")]
+    fn test_columns_raw_read_beside_a_live_view_returns_the_row() {
+        let mut c = <F as LaneTuple>::columns(16, (0.0, 0, 0));
+        <F as LaneTuple>::set(&mut c, 3, (2.5, 7, -1));
+        let raw = <F as LaneTuple>::raw(&mut c);
+        // A live view of rows 8..16, and raw reads of rows 3 and 16 beside
+        // it: the read creates no reference (Miri checks the aliasing).
+        // SAFETY: the columns outlive the view; nothing else views 8..16.
+        let mut v = unsafe { <F as LaneTuple>::view(raw, &(8..16)) };
+        <F as LaneTuple>::view_set(&mut v, 0, (1.0, 1, 1));
+        // SAFETY: the columns are alive and not reallocated; no write to
+        // row 3 runs concurrently, and no `&mut` covers it.
+        let row3 = unsafe { <F as LaneTuple>::read(raw, 3) };
+        // SAFETY: as above; row 16 is past the columns, so `None`.
+        let past = unsafe { <F as LaneTuple>::read(raw, 16) };
+        assert_eq!(row3, Some((2.5, 7, -1)));
+        assert_eq!(past, None);
+        assert_eq!(<F as LaneTuple>::view_get(&v, 0), Some((1.0, 1, 1)));
     }
 
     #[test]
