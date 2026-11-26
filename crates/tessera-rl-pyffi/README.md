@@ -14,5 +14,7 @@ capsule (both left to the caller by SPEC 5.3), and a daemon thread inside
 `PyEval_RestoreThread` guard and the thread parks forever, and on macOS
 the thread ends without unwinding, so no drop above `detach` runs.
 
-Experimental until 1.0. Its API serves Tessera's own extension crates and
-may change in any 0.x release.
+Excluded from the 1.x stability promise (ADR-0094 item 3). Its API serves
+Tessera's own extension crates and may change in a minor release. Host
+protocols 1 and 2 are stable, and so is `tessera_rl.jax.ffi_handle` as Python
+API.

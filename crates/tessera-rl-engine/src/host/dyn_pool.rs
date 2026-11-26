@@ -7,8 +7,8 @@
 //! outputs, errors and modes (Inline and Sync). Dispatch costs one virtual
 //! call per method call, never per instance or agent: inside, the pool is
 //! the monomorphised `HostPool<E, A>`. A method added to `HostPool` is
-//! added here too (the mirror test lists both). Experimental until 1.0,
-//! like the other host surfaces (ADR-0062 item 9).
+//! added here too (the mirror test lists both). Excluded from the 1.x
+//! stability promise, like the other host surfaces (ADR-0094 item 3).
 
 use tessera_rl_core::HostEnvironment;
 use tessera_rl_core::envs::HostRegistration;

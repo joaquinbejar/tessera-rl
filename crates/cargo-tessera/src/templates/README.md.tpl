@@ -25,9 +25,10 @@ Before publishing, depend on a released version instead.
 {{/path_deps}}
 {{^path_deps}}
 The Tessera crates are pinned to exactly `={{tool_version}}`, the version
-of the `cargo-tessera` that scaffolded this crate. The host environment API
-is experimental until 1.0 (ADR-0062 item 9) and a minor release may change
-it, so move every `tessera-rl*` dependency to a new version together, and
+of the `cargo-tessera` that scaffolded this crate. The host environment Rust
+API is excluded from the 1.x stability promise (ADR-0094 item 3) and a minor
+release may change it (host protocols 1 and 2, which the wheel speaks, are
+stable), so move every `tessera-rl*` dependency to a new version together, and
 run `cargo tessera check` after.
 {{/path_deps}}
 

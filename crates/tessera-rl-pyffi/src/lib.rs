@@ -59,8 +59,10 @@
 //! the counters, the boundary frame and the exception classes are per
 //! extension.
 //!
-//! Experimental until 1.0: this API serves Tessera's own extension crates
-//! and may change in any 0.x release.
+//! Excluded from the 1.x stability promise (ADR-0094 item 3): this API
+//! serves Tessera's own extension crates and may change in a minor release.
+//! Host protocols 1 and 2 are stable, and so is `tessera_rl.jax.ffi_handle`
+//! as Python API, although its handler lives in `xla`.
 
 #![expect(
     clippy::doc_markdown,

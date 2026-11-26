@@ -41,7 +41,8 @@
 //! crate that depends on the engine; the environment's own crate depends on
 //! core only (ADR-0062).
 //!
-//! Experimental until 1.0 (ADR-0062 item 9).
+//! Excluded from the 1.x stability promise (ADR-0094 item 3): a minor
+//! release may change it. Host protocols 1 and 2 are stable.
 
 #[cfg(test)]
 mod abort_header_tests;
