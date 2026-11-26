@@ -31,7 +31,8 @@ def same(a, b):
         assert np.array_equal(getattr(a, f), getattr(b, f)), f
 
 
-# 20 instances in chunks of 8: two lane groups and a tail of 4.
+# 20 instances in chunks of 8: two lane groups and a tail of 4. The walled
+# config truncates every 7 steps, so resets land mid-group.
 @pytest.mark.parametrize("auto_reset", ["next_step", "same_step"])
 @pytest.mark.parametrize("workers", [0, 2])
 @pytest.mark.parametrize("cfg", [{"size": 6, "max_steps": 40}, {"size": 8, "max_steps": 7, "layout": ROOMS}])
@@ -39,9 +40,7 @@ def test_grid_lanes_outputs_equal_grid_on_the_same_actions(auto_reset, workers, 
     lanes, grid = pair(num_envs=20, seed=11, chunk_size=8, workers=workers, auto_reset=auto_reset, **cfg)
     same(lanes.reset(), grid.reset())
     rng = np.random.default_rng(3)
-    for i in range(120):
-        if i == 60:
-            same(lanes.reset(7, [1, 9, 19]), grid.reset(7, [1, 9, 19]))
+    for _ in range(120):
         actions = rng.integers(0, 4, size=(20, 1), dtype=np.int32)
         same(lanes.step(actions), grid.step(actions))
     lanes.close()

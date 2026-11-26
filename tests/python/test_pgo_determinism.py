@@ -159,7 +159,12 @@ def test_pgo_determinism_covers_every_registered_environment():
     block = source[source.index("makers = {") :]
     block = block[: block.index("}")]
     registered = set(re.findall(r'"(tessera/[^"]+)"', block))
-    assert registered and registered == {env_id for env_id, _ in det.ENVS.values()}
+    # A lane-wise environment (ADR-0090) cannot run the tool's chunk of 4 or
+    # its Async pass; its determinism is the wheel goldens', at the best
+    # SIMD level and scalar (tools/wheel_golden.py, #726).
+    lane_wise = {"tessera/GridLanes-v1"}
+    assert registered and registered - lane_wise == {env_id for env_id, _ in det.ENVS.values()}
+    assert lane_wise <= registered
 
 
 class FakeStep(NamedTuple):
