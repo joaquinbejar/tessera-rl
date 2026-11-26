@@ -8,8 +8,8 @@
 //! are private, so safe code can only hold one inside [`Kernel::run`], which
 //! is reached only after the level's features were detected.
 //!
-//! Levels: scalar, SSE4.2, AVX2 and NEON. AVX-512 has no native test runner
-//! and is not selectable. No level enables `fma`.
+//! Levels: scalar, SSE4.2, AVX2 and NEON. AVX-512 is not a level until a
+//! native AVX-512 runner exists in CI (ADR-0101). No level enables `fma`.
 
 mod dispatch;
 mod int_lanes;

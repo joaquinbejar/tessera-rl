@@ -178,6 +178,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- AVX-512 is documented as not a SIMD level until a native AVX-512 runner exists in CI (ADR-0101, #360); `TESSERA_RL_SIMD=avx512` stays refused, so behaviour is unchanged. Docs only.
 - The release checklist checks ADR-0094 items 4 and 6 (#386): the MSRV window and Python floor, and that every supported host protocol is still accepted. The stability page lists `register_host!` with the host Rust API. Docs only.
 - The golden bless policy follows ADR-0094 item 2 (#386): from 1.0 (the crate major reaching 1, `1.0.0-rc` included) a changed fixture with an `env_version` bump under the same id is refused, since the change belongs under a new id. A generator re-bless (`TESSERA_BLESS_REASON=generator`) now needs a passed control run (`TESSERA_GOLDEN_CONTROL=<dir>`), which replays the actions recorded before the change and must reproduce the committed fixture. No golden file changes.
 - The host environment docs say what 1.0 keeps stable (ADR-0094 item 3, #386): the Rust host API (`HostEnvironment`, `HostPool`, `HostSnapshot`, `export_host_env!`) and `tessera-rl-pyffi` are excluded from the 1.x stability promise and may change in a minor release; host protocols 1 and 2 are stable, and so is `tessera_rl.jax.ffi_handle`. This replaces "experimental until 1.0" in the crate docs, the facade README and the `cargo tessera new --kind host` templates. Docs only.

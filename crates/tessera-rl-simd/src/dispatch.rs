@@ -72,7 +72,8 @@ pub enum LevelError {
     /// This CPU lacks the level; there is no fallback.
     #[error("this CPU does not have SIMD level {0}")]
     Unavailable(Level),
-    /// Not a level name, or a level without native testing such as `avx512`.
+    /// Not a level name, or a level without native testing such as `avx512`
+    /// (ADR-0101).
     #[error("{0:?} is not a selectable SIMD level")]
     Unknown(String),
 }
