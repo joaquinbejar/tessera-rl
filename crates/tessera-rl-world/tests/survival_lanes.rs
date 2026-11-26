@@ -515,10 +515,10 @@ fn stressed(s: &SurvivalState, seed: u64) -> SurvivalState {
 
 #[test]
 fn test_survival_lanes_whole_step_on_stressed_states_equals_the_reference() {
-    // A crowded map, so attacks meet their targets.
+    // A crowded map (the smallest size, 32), so attacks meet their targets.
     let crowded = SurvivalConfig {
         agents: 128,
-        size: 24,
+        size: 32,
         steps: 64,
         respawn: 2,
         ..SurvivalConfig::default()
