@@ -641,6 +641,7 @@ fn handle_of(attrs: &Attrs) -> Result<Handle, Fail> {
     // generation. The registry checks every use against the slot's current
     // generation and entry; a handle that names nothing live is refused or,
     // in `close`, does nothing to a slot that holds or is getting an entry.
+    // Forged attributes are in-process misuse, and they stay memory-safe.
     match (slot.map(u32::try_from), generation.map(u64::try_from)) {
         (Some(Ok(slot)), Some(Ok(generation))) => Ok(Handle { slot, generation }),
         _ => Err(invalid(

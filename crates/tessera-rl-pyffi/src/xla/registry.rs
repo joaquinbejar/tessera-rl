@@ -15,7 +15,8 @@
 //!   claimed (Acquire), retried with a spin and then a yield (only a call
 //!   refusing a stale handle can hold it); if the cell already holds an
 //!   entry, the slot is left occupied and skipped (never overwritten);
-//!   otherwise the entry stored; `busy` released (Release).
+//!   otherwise the generation read (Acquire) and the entry stored with it;
+//!   `busy` released (Release).
 //!
 //! A handle is not a capability: handles are built from caller-supplied
 //! values (the FFI attributes, and Python integers for `_xla_close`), so
@@ -29,11 +30,12 @@
 //! - `close`: `generation` compare-exchange from the handle's value to the
 //!   next (AcqRel; Relaxed on failure), returning if it fails (idempotent; a
 //!   stale handle does nothing); `busy` claimed (Acquire), retried with a
-//!   spin and then a yield; the entry taken; if there was one, `occupied`
-//!   store `false` (Release); the entry dropped; `busy` released (Release).
+//!   spin and then a yield; the entry taken only if it was issued in the
+//!   handle's generation; if one was taken, `occupied` store `false`
+//!   (Release); the entry dropped; `busy` released (Release).
 //!   Handles reach `close` from Python (`_xla_close(slot, generation)`), so a
 //!   handle need not have been issued by `open`: one that matches a free
-//!   slot's generation only bumps it.
+//!   slot's generation only bumps it, and never takes an entry issued after.
 //!
 //! `Busy` therefore means another call holds this handle's slot. Residual
 //! (#738): a call that passed step 0 before a close's bump may still be
@@ -78,8 +80,10 @@ struct Slot<E> {
     occupied: AtomicBool,
     busy: AtomicBool,
     generation: AtomicU64,
-    /// Read or written only while `busy` is held.
-    entry: UnsafeCell<Option<E>>,
+    /// Read or written only while `busy` is held: the entry with the
+    /// generation it was issued in, so a close takes only the entry its
+    /// handle names (#738, second reader R2-1).
+    entry: UnsafeCell<Option<(u64, E)>>,
 }
 
 impl<E> Slot<E> {
@@ -138,7 +142,7 @@ impl<E> Slot<E> {
     }
 
     /// Runs `f` on the entry cell. The caller holds `busy`.
-    fn with_entry<R>(&self, f: impl FnOnce(&mut Option<E>) -> R) -> R {
+    fn with_entry<R>(&self, f: impl FnOnce(&mut Option<(u64, E)>) -> R) -> R {
         // SAFETY: every caller holds `busy`, and `entry` is touched only
         // under it, so this is the only reference to the cell's contents.
         self.entry.with_mut(|e| f(unsafe { &mut *e }))
@@ -205,15 +209,18 @@ impl<E, const N: usize> Registry<E, N> {
             }
             // Only a call refusing a stale handle can hold `busy` here.
             let _claim = slot.claim_waiting();
-            // Never overwrite, in any build: a slot whose cell holds an entry
-            // is in use whatever its flag says, so it stays occupied and is
-            // skipped (#738, second reader F1).
+            // Never overwrite, in any build: a filled cell is in use whatever
+            // its flag says, so the slot stays occupied and is skipped (#738).
+            debug_assert!(
+                slot.with_entry(|cell| cell.is_none()),
+                "an occupied-free slot holds an entry"
+            );
             if slot.with_entry(|cell| cell.is_some()) {
                 continue;
             }
-            slot.with_entry(|cell| *cell = Some(entry));
             // Acquire: the generation a close of the previous entry bumped.
             let generation = slot.generation.load(Ordering::Acquire);
+            slot.with_entry(|cell| *cell = Some((generation, entry)));
             let slot = u32::try_from(index).unwrap_or(u32::MAX);
             return Ok(Handle { slot, generation });
         }
@@ -234,6 +241,8 @@ impl<E, const N: usize> Registry<E, N> {
         if slot.generation.load(Ordering::Acquire) != handle.generation {
             return Err(RegistryError::Closed);
         }
+        #[cfg(all(test, not(tessera_xla_loom)))]
+        tests::after_precheck();
         let Some(_claim) = slot.try_claim() else {
             // A close of this handle may hold the slot: report it as closed
             // rather than busy when the generation has moved on.
@@ -246,8 +255,12 @@ impl<E, const N: usize> Registry<E, N> {
         if slot.generation.load(Ordering::Acquire) != handle.generation {
             return Err(RegistryError::Closed);
         }
-        slot.with_entry(|cell| cell.as_mut().map(f))
-            .ok_or(RegistryError::Closed)
+        slot.with_entry(|cell| {
+            cell.as_mut()
+                .filter(|(issued, _)| *issued == handle.generation)
+                .map(|(_, entry)| f(entry))
+        })
+        .ok_or(RegistryError::Closed)
     }
 
     /// Closes `handle`'s entry: later calls refuse with `Closed`, a call in
@@ -268,7 +281,19 @@ impl<E, const N: usize> Registry<E, N> {
             return;
         }
         let _claim = slot.claim_waiting();
-        let entry = slot.with_entry(Option::take);
+        // Only the entry this handle names: one issued in another generation
+        // (a forged handle that bumped a free slot before an open read the
+        // generation) is not this close's to take (#738, second reader R2-1).
+        let entry = slot.with_entry(|cell| {
+            if cell
+                .as_ref()
+                .is_some_and(|(issued, _)| *issued == handle.generation)
+            {
+                cell.take()
+            } else {
+                None
+            }
+        });
         // Release: the slot is free for `open` once the entry is out; `open`
         // still waits for `busy`, so the drop below finishes first. Only a
         // close that took an entry frees the slot: a handle built from
@@ -311,6 +336,25 @@ mod tests {
         /// test can act while a claim is held (#738). Taken out while it
         /// runs, so the registry calls it makes do not re-enter it.
         static AFTER_CLAIM: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    std::thread_local! {
+        /// Runs on this thread in `call`, between the generation check of
+        /// step 0 and the claim, so a test can close the handle there.
+        static AFTER_PRECHECK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn after_precheck() {
+        let hook = AFTER_PRECHECK.with(|h| h.borrow_mut().take());
+        if let Some(mut f) = hook {
+            f();
+            AFTER_PRECHECK.with(|h| {
+                let mut h = h.borrow_mut();
+                if h.is_none() {
+                    *h = Some(f);
+                }
+            });
+        }
     }
 
     pub(super) fn after_claim() {
@@ -454,6 +498,86 @@ mod tests {
         );
         assert_eq!(R.call(h, |v| *v), Ok(7));
         assert_eq!(R.open(8).unwrap_err(), (8, RegistryError::Full));
+    }
+
+    /// #738 (second reader R2-1): a forged close that bumps a free slot's
+    /// generation before an open reads it never takes the entry that open
+    /// then issues. The open holds `busy` (hook) before storing; the forged
+    /// close bumps the generation and waits; the open then issues
+    /// generation 1. The close must take nothing: the handle still steps
+    /// its own entry and a second open finds no slot.
+    #[test]
+    fn test_registry_forged_close_never_takes_a_later_entry() {
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        static R: Registry<u64, 1> = Registry::new();
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let opener = std::thread::spawn(move || {
+            set_after_claim(move || {
+                held_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+            });
+            let h = R.open(11).map_err(|(_, e)| e);
+            clear_after_claim();
+            h
+        });
+        held_rx.recv().unwrap();
+        let closer = std::thread::spawn(|| {
+            R.close(Handle {
+                slot: 0,
+                generation: 0,
+            });
+        });
+        while R.slots[0].generation.load(Ordering::Acquire) == 0 {
+            std::thread::yield_now();
+        }
+        go_tx.send(()).unwrap();
+        let h = opener.join().unwrap().unwrap();
+        closer.join().unwrap();
+        assert_eq!(h.generation, 1);
+        assert_eq!(R.call(h, |v| *v), Ok(11), "the forged close took the entry");
+        assert_eq!(R.open(12).unwrap_err(), (12, RegistryError::Full));
+    }
+
+    /// #738 (second reader R2): the reload after a failed claim. A call
+    /// passes step 0; in the hook, another thread closes its handle and
+    /// holds `busy`; the call's claim then fails and must refuse `Closed`,
+    /// not `Busy`.
+    #[test]
+    fn test_registry_failed_claim_after_close_reports_closed() {
+        use std::sync::mpsc;
+        static R: Registry<u64, 1> = Registry::new();
+        let h = R.open(3).unwrap();
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let held_rx = std::sync::Mutex::new(Some(held_rx));
+        let closer = std::sync::Mutex::new(None);
+        let go_rx = std::sync::Mutex::new(Some(go_rx));
+        let closer_ref = std::sync::Arc::new(closer);
+        let closer_set = std::sync::Arc::clone(&closer_ref);
+        let held_tx = std::sync::Mutex::new(Some(held_tx));
+        AFTER_PRECHECK.with(|hk| {
+            *hk.borrow_mut() = Some(Box::new(move || {
+                let held_tx = held_tx.lock().unwrap().take().unwrap();
+                let go_rx = go_rx.lock().unwrap().take().unwrap();
+                let t = std::thread::spawn(move || {
+                    set_after_claim(move || {
+                        held_tx.send(()).unwrap();
+                        go_rx.recv().unwrap();
+                    });
+                    R.close(h);
+                    clear_after_claim();
+                });
+                held_rx.lock().unwrap().take().unwrap().recv().unwrap();
+                *closer_set.lock().unwrap() = Some(t);
+            }));
+        });
+        let r = R.call(h, |v| *v);
+        AFTER_PRECHECK.with(|hk| *hk.borrow_mut() = None);
+        go_tx.send(()).unwrap();
+        closer_ref.lock().unwrap().take().unwrap().join().unwrap();
+        assert_eq!(r, Err(RegistryError::Closed));
     }
 
     /// #738 (second reader F1): a close with a handle built from values that
@@ -601,7 +725,10 @@ mod loom_model {
         Pool(loom::cell::UnsafeCell::new(0))
     }
 
-    fn step_n<const N: usize>(r: &Registry<Pool, N>, h: super::Handle) -> Result<u64, RegistryError> {
+    fn step_n<const N: usize>(
+        r: &Registry<Pool, N>,
+        h: super::Handle,
+    ) -> Result<u64, RegistryError> {
         r.call(h, |p| {
             p.0.with_mut(|v| {
                 // SAFETY: loom tracks this access; the registry's busy flag
@@ -719,15 +846,23 @@ mod loom_model {
             let h = r.open(pool()).map_err(|_| ()).unwrap();
             closer.join().unwrap();
             // The forged close either bumped the free slot before the open
-            // read its generation, or closed the issued handle (it then
-            // matches it exactly); it never frees a slot holding an entry.
+            // read its generation (it then takes nothing: the entry carries
+            // generation 1), or closed the issued handle (it then matches it
+            // exactly); it never frees a slot holding an entry, and a closed
+            // handle never reaches a later entry.
             match step_n(&r, h) {
                 Ok(1) => {
-                    assert!(r.open(pool()).is_err(), "a second entry in an occupied slot");
+                    assert!(
+                        r.open(pool()).is_err(),
+                        "a second entry in an occupied slot"
+                    );
                 }
                 Err(RegistryError::Closed) => {
                     let h2 = r.open(pool()).map_err(|_| ()).unwrap();
+                    assert_ne!(h2, h, "two live handles name one entry");
                     assert_eq!(step_n(&r, h2), Ok(1));
+                    // R2-1: the closed handle never reaches the new entry.
+                    assert_eq!(step_n(&r, h), Err(RegistryError::Closed));
                 }
                 other => panic!("{other:?}"),
             }
