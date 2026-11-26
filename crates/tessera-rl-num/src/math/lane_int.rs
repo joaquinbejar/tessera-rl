@@ -192,6 +192,98 @@ pub trait I32Lanes: Copy {
     /// Lanewise not.
     #[must_use]
     fn mask_not(a: Self::Mask) -> Self::Mask;
+
+    // Narrow loads, stores and the byte gather (ADR-0100 decision 4). The
+    // defaults are the reference: per lane, the named scalar conversion.
+    // `tessera-rl-simd` may override a load with an extend instruction,
+    // tested bit for bit against these.
+
+    /// The lanes of `v`, each sign-extended (`i32::from`).
+    #[inline(always)]
+    #[must_use]
+    fn from_i16(v: [i16; 8]) -> Self {
+        Self::from_array(v.map(i32::from))
+    }
+    /// The lanes of `v`, each zero-extended (`i32::from`).
+    #[inline(always)]
+    #[must_use]
+    fn from_u16(v: [u16; 8]) -> Self {
+        Self::from_array(v.map(i32::from))
+    }
+    /// The lanes of `v`, each zero-extended (`i32::from`).
+    #[inline(always)]
+    #[must_use]
+    fn from_u8(v: [u8; 8]) -> Self {
+        Self::from_array(v.map(i32::from))
+    }
+    /// The low 16 bits of each lane, as `i16`.
+    ///
+    /// Exact when every lane is in `i16`'s range, which the caller
+    /// guarantees (a game-rule clamp or a bounded counter); a lane outside
+    /// it fails a `debug_assert!` and, in release, keeps its low bits.
+    #[inline(always)]
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "exact by contract (ADR-0100 D4); debug_assert checks the range"
+    )]
+    fn to_i16(self) -> [i16; 8] {
+        self.to_array().map(|v| {
+            debug_assert!(i16::try_from(v).is_ok(), "lane {v} is outside i16");
+            v as i16
+        })
+    }
+    /// The low 16 bits of each lane, as `u16`; exact in `u16`'s range, as
+    /// [`I32Lanes::to_i16`].
+    #[inline(always)]
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "exact by contract (ADR-0100 D4); debug_assert checks the range"
+    )]
+    fn to_u16(self) -> [u16; 8] {
+        self.to_array().map(|v| {
+            debug_assert!(u16::try_from(v).is_ok(), "lane {v} is outside u16");
+            v as u16
+        })
+    }
+    /// The low 8 bits of each lane, as `u8`; exact in `u8`'s range, as
+    /// [`I32Lanes::to_i16`].
+    #[inline(always)]
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "exact by contract (ADR-0100 D4); debug_assert checks the range"
+    )]
+    fn to_u8(self) -> [u8; 8] {
+        self.to_array().map(|v| {
+            debug_assert!(u8::try_from(v).is_ok(), "lane {v} is outside u8");
+            v as u8
+        })
+    }
+    /// `base[idx[i]]` zero-extended, per lane: a scalar gather at every
+    /// level (ADR-0100 decision 4).
+    ///
+    /// Infallible: the caller guarantees every index is in bounds; a lane
+    /// whose index is negative or past the end fails a `debug_assert!` and,
+    /// in release, reads 0. That 0 only keeps the gather infallible: it is
+    /// not a semantics a kernel may rely on, and a kernel that passes an
+    /// out-of-range index is a bug its differential must catch.
+    #[inline(always)]
+    #[must_use]
+    fn gather_u8(base: &[u8], idx: [i32; 8]) -> Self {
+        Self::from_array(idx.map(|i| {
+            let got = usize::try_from(i).ok().and_then(|i| base.get(i)).copied();
+            debug_assert!(
+                got.is_some(),
+                "gather index {i} is outside 0..{}",
+                base.len()
+            );
+            got.map_or(0, i32::from)
+        }))
+    }
 }
 
 /// The mask of an [`Fx32Lanes`] type: its raw lanes' mask.
