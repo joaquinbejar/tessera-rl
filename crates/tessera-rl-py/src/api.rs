@@ -433,6 +433,28 @@ pub(crate) fn make_grid(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_grid_lanes(**kwargs)`: the reference grid world on a lane-wise
+/// state (ADR-0090), with `make_grid`'s options. A `chunk_size` that is not
+/// a multiple of 8 and `mode="async"` raise `ConfigError`.
+pub(crate) fn make_grid_lanes(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(
+        g,
+        &[&POOL_KEYS, &["outputs", "size", "max_steps", "layout"]],
+    )?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 10_001)?;
+    let (size, max_steps) = (kw.u32(g, "size")?, kw.u32(g, "max_steps")?);
+    let layout = kw
+        .get("layout")
+        .map(|v| asset_arg::<tessera_rl_classic::GridLayout>(g, v, "layout"))
+        .transpose()?;
+    let ops = g
+        .detach(|| crate::env::grid_lanes(&args, size, max_steps, layout))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// An asset argument (ADR-0077): a bundled asset's name (`str`) or its
 /// bytes (`bytes`, at most 16 MiB). A refused asset is `ConfigError`.
 fn asset_arg<T: tessera_rl_core::AssetData>(

@@ -78,6 +78,8 @@ CONFIGS = {
     "tag-v1-crowded-same-step": _CROWDED,
     "grid-v1-next-step": _GRID,
     "grid-v1-same-step": _GRID,
+    "grid-lanes-v1-next-step": _GRID,
+    "grid-lanes-v1-same-step": _GRID,
     "keydoor-v1-a1-next-step": {"size": 6, "agents": 1},
     "keydoor-v1-a3-same-step": {"size": 6, "agents": 3},
     "snake-v1-a1-pixels-next-step": {"size": 8, "agents": 1, "obs": "pixels"},

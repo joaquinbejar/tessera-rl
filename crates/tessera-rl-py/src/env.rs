@@ -9,8 +9,9 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use crate::ffi::archive_type::AnyArchive;
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Gather,
-    GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
-    PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
+    GatherConfig, Grid, GridConfig, GridLanes, KeyDoor, KeyDoorConfig, MountainCar,
+    MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig,
+    Tag, TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -1988,6 +1989,30 @@ pub(crate) fn grid(
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Grid, NoMasks>::new(cfg.clone(), options)?;
     finish_rendered(&cfg, pool, args, n, same_step)
+}
+
+/// The reference grid world on a lane-wise state (`tessera/GridLanes-v1`,
+/// ADR-0090): `Grid`'s config and dynamics. The pool refuses a chunk size
+/// that is not a multiple of 8 and Async mode (ADR-0090 4.5), both as
+/// configuration errors; the default chunk size (64) is valid.
+pub(crate) fn grid_lanes(
+    args: &PoolArgs,
+    size: Option<u32>,
+    max_steps: Option<u32>,
+    layout: Option<tessera_rl_core::Asset<tessera_rl_classic::GridLayout>>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = GridConfig::default();
+    let field =
+        |v: Option<u32>, default: u16| v.map_or(default, |x| u16::try_from(x).unwrap_or(u16::MAX));
+    let cfg = GridConfig {
+        size: field(size, d.size),
+        max_steps: field(max_steps, d.max_steps),
+        layout: layout.unwrap_or(d.layout),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<GridLanes, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// A key and door pool (`tessera/GridKeyDoor-v1`), with masks; heuristic
