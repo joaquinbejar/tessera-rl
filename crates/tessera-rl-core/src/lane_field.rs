@@ -81,8 +81,10 @@ impl<T> RawColumn<T> {
     ///
     /// # Safety
     ///
-    /// The column is alive and not reallocated, and no write to row `i`
-    /// runs concurrently.
+    /// The column is alive and not reallocated; since the pointer was
+    /// taken, no new `&mut` of the column or of its `Vec` was created; no
+    /// live `&mut` view covers row `i`, even on the same thread; and no
+    /// write to row `i` runs concurrently.
     #[expect(unsafe_code, reason = "audited module: disjoint column views")]
     unsafe fn read(self, i: usize) -> Option<T>
     where
@@ -95,7 +97,8 @@ impl<T> RawColumn<T> {
         let row = unsafe { self.ptr.add(i) };
         // SAFETY: `row` points at an initialized `T` of the live column
         // (every row is filled at construction), properly aligned (an
-        // element of a `Vec<T>`); the caller guarantees no concurrent write.
+        // element of a `Vec<T>`); the caller guarantees that no `&mut`
+        // covers it and that no write runs concurrently.
         Some(unsafe { row.read() })
     }
 }
@@ -158,8 +161,10 @@ pub trait LaneTuple: Copy + Send + Sync + 'static + crate::sealed::LaneTupleSeal
     ///
     /// # Safety
     ///
-    /// The columns `raw` was taken from are alive and not reallocated, and
-    /// no write to row `i` of any column runs concurrently.
+    /// The columns `raw` was taken from are alive and not reallocated;
+    /// since `raw` was taken, no new `&mut` of a column or of its `Vec` was
+    /// created; no live `&mut` view covers row `i` of any column, even on
+    /// the same thread; and no write to row `i` runs concurrently.
     #[doc(hidden)]
     #[expect(unsafe_code, reason = "audited module: disjoint column views")]
     unsafe fn read(raw: Self::Raw, i: usize) -> Option<Self>;
@@ -280,9 +285,9 @@ macro_rules! field_tuple {
 
             #[expect(unsafe_code, reason = "audited module: disjoint column views")]
             unsafe fn read(raw: Self::Raw, i: usize) -> Option<Self> {
-                // SAFETY: each column is alive and not reallocated, and no
-                // write to row `i` runs concurrently (this function's
-                // contract).
+                // SAFETY: this function's contract, for each column: alive,
+                // not reallocated, no new `&mut` since `raw` was taken, no
+                // live `&mut` view of row `i`, no concurrent write.
                 Some(($(unsafe { raw.$i.read(i) }?,)+))
             }
 
