@@ -763,9 +763,10 @@ mod tests {
     /// Serializes the tests that use `TOYS` (#737). They share one registry:
     /// `open` claims each slot it scans and `call` claims a slot before its
     /// generation check, so a test opening a handle or calling a closed one
-    /// can make another test's live slot `Busy` for a moment, which is the
-    /// registry's protocol, not a fault. A test that fails while holding the
-    /// lock poisons it; the others still run.
+    /// can make another test's live slot `Busy` for a moment. That spurious
+    /// refusal can also reach a live step in production; its fix is tracked
+    /// separately, and this lock only isolates the tests. A test that fails
+    /// while holding the lock poisons it; the others still run.
     static TOYS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn toys_serial() -> std::sync::MutexGuard<'static, ()> {
