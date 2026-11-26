@@ -227,9 +227,12 @@ fn test_grid_lanes_kernel_floors_negative_cells_against_any_goal() {
         s.col = Fx32::from_raw(-(1 << 16));
         s.row = Fx32::from_raw(i32::try_from(l % 4).unwrap() << 16);
         s.goal_col = 65535;
-        s.goal_row = s.row.to_raw() >> 16;
+        // The goal row is the row after the move (north on even lanes, south
+        // on odd ones), so only the column decides whether it is reached.
+        let row = s.row.to_raw() >> 16;
+        s.goal_row = if l % 2 == 0 { row - 1 } else { row + 1 };
     }
-    // North and south keep the agent one cell off the grid.
+    // North and south keep the agent one cell left of the grid.
     let actions = [0, 1, 0, 1, 0, 1, 0, 1];
     for level in Resolved::available() {
         let (lanes, out) = lane_step(level, cfg, &states, &actions);
