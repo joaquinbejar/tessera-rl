@@ -150,6 +150,10 @@ fn stepped<E, M>(mut p: EnvPool<E, M>, heads: usize) -> u32
 where
     E: tessera_rl_core::Environment<State = Unit>,
     M: crate::MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
 {
     p.reset_all(Reseed::Keep)
         .unwrap_or_else(|e| panic!("reset: {e}"));
