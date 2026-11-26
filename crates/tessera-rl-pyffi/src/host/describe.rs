@@ -43,26 +43,31 @@ fn plain(version: &str) -> String {
         .to_owned()
 }
 
-/// The next minor release, the first `tessera_rl` a host object built
-/// with this crate does not accept (pre-1.0, a minor release may break
-/// protocol surfaces, ADR-0062 item 9).
+/// The first `tessera_rl` a host object built with this crate does not
+/// accept: the next minor release before 1.0 (a 0.x minor release may break
+/// protocol surfaces), the next major release from 1.0, since every 1.x
+/// release supports the host protocols of 1.0 (ADR-0094 item 4).
 #[must_use]
 pub fn version_below() -> String {
-    next_minor(env!("CARGO_PKG_VERSION"))
+    next_breaking(env!("CARGO_PKG_VERSION"))
 }
 
-/// `MAJOR.(MINOR + 1).0` of `version`, ignoring any pre-release or build
-/// suffix; the version itself if it is not `MAJOR.MINOR.PATCH`.
-fn next_minor(version: &str) -> String {
+/// `0.(MINOR + 1).0` for a `0.MINOR.PATCH` `version`, `(MAJOR + 1).0.0` from
+/// 1.0, ignoring any pre-release or build suffix; the version itself if it
+/// is not `MAJOR.MINOR.PATCH` or the next number does not fit in `u64`.
+fn next_breaking(version: &str) -> String {
     let core = version.split(['-', '+']).next().unwrap_or(version);
     let mut parts = core.split('.');
     match (
         parts.next().and_then(|p| p.parse::<u64>().ok()),
         parts.next().and_then(|p| p.parse::<u64>().ok()),
     ) {
-        (Some(major), Some(minor)) => {
-            format!("{major}.{}.0", minor.saturating_add(1))
-        }
+        (Some(0), Some(minor)) => minor
+            .checked_add(1)
+            .map_or_else(|| version.to_owned(), |next| format!("0.{next}.0")),
+        (Some(major), Some(_)) => major
+            .checked_add(1)
+            .map_or_else(|| version.to_owned(), |next| format!("{next}.0.0")),
         _ => version.to_owned(),
     }
 }
@@ -187,17 +192,25 @@ pub(super) fn layout<'py>(g: Gil<'py>, pool: &dyn DynHostPool) -> CResult<Mine<'
 
 #[cfg(test)]
 mod tests {
-    use super::{next_minor, plain, version_below, version_min};
+    use super::{next_breaking, plain, version_below, version_min};
 
     #[test]
-    fn test_host_version_range_is_this_release_to_the_next_minor() {
-        assert_eq!(next_minor("0.2.0"), "0.3.0");
-        assert_eq!(next_minor("1.4.9"), "1.5.0");
-        assert_eq!(next_minor("0.3.0-rc.1"), "0.4.0");
-        assert_eq!(next_minor("garbage"), "garbage");
+    fn test_host_version_range_is_the_next_minor_before_1_0_and_the_next_major_from_it() {
+        assert_eq!(next_breaking("0.2.0"), "0.3.0");
+        assert_eq!(next_breaking("0.3.0-rc.1"), "0.4.0");
+        assert_eq!(next_breaking("0.99.7"), "0.100.0");
+        assert_eq!(next_breaking("1.0.0"), "2.0.0");
+        assert_eq!(next_breaking("1.4.9"), "2.0.0");
+        assert_eq!(next_breaking("1.0.0-rc.1+build.2"), "2.0.0");
+        assert_eq!(next_breaking("2.7.1"), "3.0.0");
+        assert_eq!(next_breaking("garbage"), "garbage");
+        let top_minor = format!("0.{}.0", u64::MAX);
+        assert_eq!(next_breaking(&top_minor), top_minor);
+        let top_major = format!("{}.0.0", u64::MAX);
+        assert_eq!(next_breaking(&top_major), top_major);
         assert_eq!(plain("0.3.0-rc.1+build.5"), "0.3.0");
         assert_eq!(plain("0.2.0"), "0.2.0");
         assert_eq!(version_min(), plain(env!("CARGO_PKG_VERSION")));
-        assert_eq!(version_below(), next_minor(env!("CARGO_PKG_VERSION")));
+        assert_eq!(version_below(), next_breaking(env!("CARGO_PKG_VERSION")));
     }
 }
