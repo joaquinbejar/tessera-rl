@@ -1,0 +1,45 @@
+error[E0277]: the trait bound `Pool<i32, 4>: LaneField` is not satisfied
+ --> tests/ui/fail/lanes_pool_field.rs:6:10
+  |
+6 | #[derive(EnvState, Clone, Copy, Default)]
+  |          ^^^^^^^^ the trait `LaneField` is not implemented for `Pool<i32, 4>`
+  |
+  = help: the following other types implement trait `LaneField`:
+            Bool8
+            f32
+            f64
+            i32
+            tessera_rl_num::fx32::Fx32
+            u32
+  = note: required for `(f64, Pool<i32, 4>)` to implement `LaneTuple`
+note: required by a bound in `tessera_rl_core::EnvState::Fields`
+ --> $WORKSPACE/crates/tessera-rl-core/src/env.rs
+  |
+  |     type Fields: crate::lane_field::LaneTuple;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EnvState::Fields`
+  = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Pool<i32, 4>: LaneField` is not satisfied
+  --> tests/ui/fail/lanes_pool_field.rs:11:12
+   |
+11 |     items: Pool<i32, 4>,
+   |            ^^^^^^^^^^^^ the trait `LaneField` is not implemented for `Pool<i32, 4>`
+   |
+   = help: the following other types implement trait `LaneField`:
+             Bool8
+             f32
+             f64
+             i32
+             tessera_rl_num::fx32::Fx32
+             u32
+note: required by a bound in `_::assert_lane_field`
+  --> tests/ui/fail/lanes_pool_field.rs:11:12
+   |
+11 |     items: Pool<i32, 4>,
+   |            ^^^^ required by this bound in `assert_lane_field`
+
+error[E0080]: evaluation panicked: EnvState: `S` has trailing padding after field `items`; add a Reserved<N> field at the end, with N = size_of::<S>() minus the end of `items` (ADR-0029)
+  --> tests/ui/fail/lanes_pool_field.rs:11:5
+   |
+11 |     items: Pool<i32, 4>,
+   |     ^^^^^ evaluation of `_` failed here
