@@ -22,6 +22,7 @@
 //! every value is bounded far inside `Fx32` by the rules, so none saturates.
 
 mod baseline;
+mod pixels;
 mod render;
 mod validate;
 
@@ -365,60 +366,6 @@ impl Observation<BrickWallConfig> for BrickWallObs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BrickWall;
 
-/// Output cells `[lo, hi)` covered by the world interval `[a0, a1)` of a side
-/// `world` long, clipped to the frame.
-fn span(a0: Fx32, a1: Fx32, world: i32) -> (usize, usize) {
-    let side = PIXELS.cast_signed();
-    let lo = a0.to_raw() >> 16;
-    let hi = (a1.to_raw().saturating_add(0xFFFF)) >> 16;
-    let c0 = (lo * side).div_euclid(world).clamp(0, side);
-    let c1 = (hi * side + world - 1).div_euclid(world).clamp(0, side);
-    let index = |v: i32| usize::try_from(v).unwrap_or(0);
-    (index(c0), index(c1.max(c0)))
-}
-
-/// `bytes` is zero on entry (ADR-0058): only the lit pixels are written.
-fn draw_pixels(s: &BrickWallState, bytes: &mut [u8]) {
-    let side = PIXELS as usize;
-    let mut paint = |x0: Fx32, x1: Fx32, y0: Fx32, y1: Fx32, shade: u8| {
-        let (c0, c1) = span(x0, x1, WIDTH);
-        let (r0, r1) = span(y0, y1, HEIGHT);
-        for row in r0..r1 {
-            if let Some(line) = bytes.get_mut(row * side + c0..row * side + c1) {
-                line.fill(shade);
-            }
-        }
-    };
-    for row in 0..ROWS {
-        let shade = SHADE_BANDS
-            .get(usize::try_from(row / 2).unwrap_or(0))
-            .copied()
-            .unwrap_or(0);
-        for col in 0..COLS {
-            if s.has(row, col) {
-                let (x, y) = (BRICK_W * col, WALL_TOP + BRICK_H * row);
-                paint(fx(x), fx(x + BRICK_W), fx(y), fx(y + BRICK_H), shade);
-            }
-        }
-    }
-    paint(
-        s.px,
-        s.px.saturating_add(fx(PADDLE_W)),
-        fx(PADDLE_Y),
-        fx(PADDLE_Y + PADDLE_H),
-        SHADE_OBJECT,
-    );
-    if !s.parked() {
-        paint(
-            s.x,
-            s.x.saturating_add(fx(BALL)),
-            s.y,
-            s.y.saturating_add(fx(BALL)),
-            SHADE_OBJECT,
-        );
-    }
-}
-
 /// The frozen recipe: exact `f64`, an offset, a scale, one cast.
 #[expect(
     clippy::cast_possible_truncation,
@@ -529,7 +476,7 @@ impl Environment for BrickWall {
                 chunk.copy_from_slice(&v.to_le_bytes());
             }
         } else {
-            draw_pixels(s, bytes);
+            pixels::draw(s, bytes);
         }
     }
 }
