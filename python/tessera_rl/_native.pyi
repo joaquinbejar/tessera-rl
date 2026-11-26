@@ -451,6 +451,7 @@ def make_grid(
     outputs: str | None = None,
     size: int | None = None,
     max_steps: int | None = None,
+    layout: str | bytes | bytearray | None = None,
 ) -> Env: ...
 def make_grid_lanes(
     *,
@@ -467,6 +468,7 @@ def make_grid_lanes(
     outputs: str | None = None,
     size: int | None = None,
     max_steps: int | None = None,
+    layout: str | bytes | bytearray | None = None,
 ) -> Env: ...
 def make_keydoor(
     *,

@@ -349,11 +349,11 @@ pub(super) const MAKERS: [FunctionRow; 22] = [
     ),
     FunctionRow::kw::<MakeGrid>(
         c"make_grid",
-        c"make_grid($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None)\n--\n\nmake_grid(**pool_options, size=16, max_steps=200) -> Env",
+        c"make_grid($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None, layout=None)\n--\n\nmake_grid(**pool_options, size=16, max_steps=200, layout=\"open\") -> Env",
     ),
     FunctionRow::kw::<MakeGridLanes>(
         c"make_grid_lanes",
-        c"make_grid_lanes($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None)\n--\n\nmake_grid_lanes(**pool_options, size=16, max_steps=200) -> Env; chunk_size must be a multiple of 8, mode=\"async\" is refused",
+        c"make_grid_lanes($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None, layout=None)\n--\n\nmake_grid_lanes(**pool_options, size=16, max_steps=200, layout=\"open\") -> Env; chunk_size must be a multiple of 8, mode=\"async\" is refused",
     ),
     FunctionRow::kw::<MakeKeydoor>(
         c"make_keydoor",

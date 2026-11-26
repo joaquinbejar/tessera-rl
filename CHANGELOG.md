@@ -198,6 +198,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- `make_grid` and `make_grid_lanes` list their `layout` option in the text signature and the stubs (#726 follow-up); the option itself is unchanged.
 - `tools/bench/bench.py` records the measured commit from a root `.head` file (the full 40-hex SHA) when the source is a `git archive` without a checkout of its own (one unpacked inside an unrelated work tree never takes that tree's commit), and refuses to run when neither exists, when `.head` is malformed or disagrees with the checkout, or when `git status` fails, before measuring anything; the report's `software.git_source` says `"checkout"` or `".head"`; reports no longer carry `"git": "unknown"`, which the dashboard judges invalid (#640).
 - Derive macros point their errors at the offending field (#365, #395), and `EnvState` reports a non-plain-data field type at that field only (#388, #461).
 - `tessera/Lanterns-v1`: importing a reached state no longer fails with "a card in a slot that cannot hold one" once the deck is out. A played or discarded slot stays empty then while later slots keep their cards, and the state validator now accepts that hand (#728, #640). Dynamics, rewards, observations, masks and termination are unchanged, so the environment version stays 1.
