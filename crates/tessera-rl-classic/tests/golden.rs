@@ -9,7 +9,8 @@
 mod support;
 
 use support::{
-    Bless, BlessReason, Scenario, bless_decision, bless_into, check, committed, compare_text, run,
+    Actions, Bless, BlessReason, ControlMark, Policy, Scenario, bless_decision, bless_into, check,
+    committed, compare_text, control_compare, digest, read_actions, run, run_with, stable_version,
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
@@ -191,33 +192,165 @@ fn test_golden_bless_policy_needs_an_env_version_bump() {
     let old = text(&lines);
     let changed = with_changed_digest(&lines);
     // Unchanged output: nothing is written.
-    assert_eq!(bless_decision(Some(&old), &old, None), Ok(Bless::Unchanged));
+    assert_eq!(
+        bless_decision(Some(&old), &old, None, PRE),
+        Ok(Bless::Unchanged)
+    );
     // A new fixture is written.
-    assert_eq!(bless_decision(None, &old, None), Ok(Bless::Write));
+    assert_eq!(bless_decision(None, &old, None, PRE), Ok(Bless::Write));
     // A changed digest alone, or with only MATH_VERSION bumped: refused.
-    assert!(bless_decision(Some(&old), &text(&changed), None).is_err());
+    assert!(bless_decision(Some(&old), &text(&changed), None, PRE).is_err());
     let math = bump(&changed, "math_version", "2");
-    assert!(bless_decision(Some(&old), &text(&math), None).is_err());
-    assert!(bless_decision(Some(&old), &text(&math), Some(BlessReason::Format)).is_err());
+    assert!(bless_decision(Some(&old), &text(&math), None, PRE).is_err());
+    assert!(bless_decision(Some(&old), &text(&math), Some(BlessReason::Format), PRE).is_err());
     // An env_version bump authorizes it.
     let env = bump(&changed, "env_version", "2");
     assert_eq!(
-        bless_decision(Some(&old), &text(&env), None),
+        bless_decision(Some(&old), &text(&env), None, PRE),
         Ok(Bless::Write)
     );
     // Harness migrations need the matching reason.
     let format = bump(&changed, "format", "99");
-    assert!(bless_decision(Some(&old), &text(&format), None).is_err());
-    assert!(bless_decision(Some(&old), &text(&format), Some(BlessReason::Generator)).is_err());
+    assert!(bless_decision(Some(&old), &text(&format), None, PRE).is_err());
+    assert!(
+        bless_decision(
+            Some(&old),
+            &text(&format),
+            Some(BlessReason::Generator),
+            PRE
+        )
+        .is_err()
+    );
     assert_eq!(
-        bless_decision(Some(&old), &text(&format), Some(BlessReason::Format)),
+        bless_decision(Some(&old), &text(&format), Some(BlessReason::Format), PRE),
         Ok(Bless::Write)
     );
+    // A generator migration also needs a passed control run (from now,
+    // ADR-0094 item 2): see test_golden_bless_policy_generator_needs_a_passed_control.
     let generator = bump(&changed, "actions", "other-v2");
+    assert!(
+        bless_decision(
+            Some(&old),
+            &text(&generator),
+            Some(BlessReason::Generator),
+            PRE
+        )
+        .is_err()
+    );
+}
+
+/// The policy before 1.0, without a control run.
+const PRE: Policy = Policy {
+    stable: false,
+    control: None,
+};
+
+fn passed(old: &str) -> ControlMark {
+    ControlMark {
+        fixture: digest(old.as_bytes()),
+        actions: 0,
+    }
+}
+
+/// From 1.0, `env_version` is frozen per id (ADR-0094 item 2): the bump
+/// that authorizes a change before 1.0 is refused.
+#[test]
+fn test_golden_bless_policy_env_version_bump_is_refused_from_1_0() {
+    let lines = cartpole_lines();
+    let old = text(&lines);
+    let env = text(&bump(&with_changed_digest(&lines), "env_version", "2"));
     assert_eq!(
-        bless_decision(Some(&old), &text(&generator), Some(BlessReason::Generator)),
+        bless_decision(Some(&old), &env, None, PRE),
         Ok(Bless::Write)
     );
+    let stable = Policy {
+        stable: true,
+        control: None,
+    };
+    let err = bless_decision(Some(&old), &env, None, stable).unwrap_err();
+    assert!(err.contains("ADR-0094") && err.contains("new id"), "{err}");
+    // A control run does not lift the freeze.
+    let controlled = Policy {
+        stable: true,
+        control: Some(passed(&old)),
+    };
+    assert!(bless_decision(Some(&old), &env, Some(BlessReason::Generator), controlled).is_err());
+    // A new id is a new fixture, written as before.
+    assert_eq!(bless_decision(None, &env, None, stable), Ok(Bless::Write));
+}
+
+/// A generator re-bless needs a passed control run for the fixture it
+/// replaces, before and after 1.0.
+#[test]
+fn test_golden_bless_policy_generator_needs_a_passed_control() {
+    let lines = cartpole_lines();
+    let old = text(&lines);
+    let generator = text(&bump(&with_changed_digest(&lines), "actions", "other-v2"));
+    let reason = Some(BlessReason::Generator);
+    assert!(bless_decision(Some(&old), &generator, reason, PRE).is_err());
+    let other = Policy {
+        stable: false,
+        control: Some(ControlMark {
+            fixture: digest(old.as_bytes()) ^ 1,
+            actions: 0,
+        }),
+    };
+    let err = bless_decision(Some(&old), &generator, reason, other).unwrap_err();
+    assert!(err.contains("another fixture"), "{err}");
+    for stable in [false, true] {
+        let policy = Policy {
+            stable,
+            control: Some(passed(&old)),
+        };
+        assert_eq!(
+            bless_decision(Some(&old), &generator, reason, policy),
+            Ok(Bless::Write),
+            "stable={stable}"
+        );
+        // Without the reason, the control alone authorizes nothing.
+        assert!(bless_decision(Some(&old), &generator, None, policy).is_err());
+    }
+}
+
+/// The freeze starts at 1.0.0-rc (ADR-0094 item 2).
+#[test]
+fn test_golden_bless_stable_version_from_the_major() {
+    assert!(!stable_version("0.3.0"));
+    assert!(!stable_version("0.99.9-rc.1"));
+    assert!(stable_version("1.0.0-rc.1"));
+    assert!(stable_version("1.0.0"));
+    assert!(stable_version("2.4.1+build"));
+    assert!(!stable_version("garbage"));
+}
+
+/// The control run: CartPole's committed fixture is reproduced by its own
+/// recorded actions, ignoring only the `actions=` line, and a changed
+/// action breaks it.
+#[test]
+fn test_golden_control_replay_reproduces_the_committed_fixture() {
+    let name = "cartpole-v1-next-step";
+    let s = cartpole(name, AutoReset::NextStep);
+    let build =
+        |cfg, options| EnvPool::<CartPole>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"));
+    let dir = std::env::temp_dir().join(format!("tessera-control-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    let file = std::fs::File::create(dir.join(format!("{name}.actions")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let generated = run_with::<CartPole, _>(&s, build, None, Actions::Generate(Some(file)));
+    let recorded = read_actions(&dir, name);
+    let committed = committed(name);
+    let replayed = run_with::<CartPole, _>(&s, build, None, Actions::Replay(recorded.clone()));
+    assert_eq!(replayed, generated);
+    // A generator renamed in the header still passes the control.
+    let renamed = bump(&replayed, "actions", "other-v2");
+    assert_eq!(control_compare(name, &committed, &renamed), Ok(()));
+    let mut tampered = recorded;
+    if let Some(a) = tampered.get_mut(100) {
+        *a = 1 - *a;
+    }
+    let broken = run_with::<CartPole, _>(&s, build, None, Actions::Replay(tampered));
+    assert!(control_compare(name, &committed, &broken).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Blessing a temporary fixture: an unchanged output leaves the file
@@ -228,15 +361,15 @@ fn test_golden_bless_leaves_unchanged_and_refused_fixtures_intact() {
     let dir = std::env::temp_dir().join(format!("tessera-golden-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
     let file = dir.join("fixture.golden");
-    assert_eq!(bless_into(&file, &lines, None), Ok(Bless::Write));
+    assert_eq!(bless_into(&file, &lines, None, PRE), Ok(Bless::Write));
     let written = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
-    assert_eq!(bless_into(&file, &lines, None), Ok(Bless::Unchanged));
+    assert_eq!(bless_into(&file, &lines, None, PRE), Ok(Bless::Unchanged));
     assert_eq!(
         std::fs::metadata(&file).and_then(|m| m.modified()).ok(),
         written
     );
     let math = bump(&with_changed_digest(&lines), "math_version", "2");
-    assert!(bless_into(&file, &math, None).is_err());
+    assert!(bless_into(&file, &math, None, PRE).is_err());
     assert_eq!(std::fs::read_to_string(&file).ok(), Some(text(&lines)));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -250,7 +383,8 @@ fn test_golden_bless_of_current_output_is_unchanged() {
         bless_decision(
             Some(&committed("cartpole-v1-next-step")),
             &text(&lines),
-            None
+            None,
+            PRE
         ),
         Ok(Bless::Unchanged)
     );

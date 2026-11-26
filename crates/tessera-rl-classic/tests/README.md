@@ -16,13 +16,19 @@
 
 The fixture format is documented in `support/mod.rs`.
 
-Fixtures are written only with `TESSERA_BLESS=1 cargo test -p tessera-rl-classic --test golden`. Blessing follows a policy (ADR-0008, ADR-0023):
+Fixtures are written only with `TESSERA_BLESS=1 cargo test -p tessera-rl-classic --test golden`. Blessing follows a policy (ADR-0008, ADR-0023, ADR-0094 item 2):
 
 - If the output did not change, the file is left untouched.
 - A new fixture is written.
-- A changed fixture needs an `env_version` bump. A `MATH_VERSION` bump alone does **not** authorize it: new math is a new environment version that records it, and the old version stays reproducible.
+- Before 1.0, a changed fixture needs an `env_version` bump. From 1.0, `env_version` is frozen per id and a bump is refused: register the changed environment under a new id (ADR-0080). The freeze switches on by itself when the crate version's major number reaches 1, so `1.0.0-rc.N` already counts, and it applies to every id, including ids first registered after 1.0. A `MATH_VERSION` bump alone does **not** authorize it: new math is a new environment version that records it, and the old version stays reproducible.
 - A harness migration needs an explicit reason: `TESSERA_BLESS_REASON=format` with a changed format version, or `TESSERA_BLESS_REASON=generator` with a changed action generator.
 - Re-bless without an `ENV_VERSION` bump when only the generator's actions change; `ENV_VERSION` tracks dynamics, state and outputs.
+- A generator re-bless also needs a passed control run, which shows the environment did not change. The control replays the actions recorded before the change through the current code:
+  1. Before changing the generator: `TESSERA_GOLDEN_ACTIONS=<dir> cargo test --test golden` writes `<dir>/<name>.actions`.
+  2. After the change: `TESSERA_GOLDEN_CONTROL=<dir> cargo test --test golden` replays them, compares with the committed fixture (ignoring only its `actions=` line) and writes `<dir>/<name>.control`, holding the XXH3-64 of the fixture and of the actions file. A mismatch fails: the environment changed, so it needs a new id or `ENV_VERSION` instead.
+  3. `TESSERA_BLESS=1 TESSERA_BLESS_REASON=generator TESSERA_GOLDEN_CONTROL=<dir> cargo test --test golden` writes the new fixture only where the mark names the fixture being replaced and the actions file is unchanged.
+
+  The re-bless PR cites the control run's output: the `.control` files' contents.
 - A refused change leaves the fixture intact.
 
 A plain run is read-only. It fails on any difference, reporting the first diverging call and field and the instances that end with a different record. The negative tests of the policy use in-memory text and a temporary file, never `tests/golden/`.
