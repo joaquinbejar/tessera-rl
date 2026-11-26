@@ -1072,7 +1072,7 @@ def make(
     default; it keeps caches warm at the cost of about one core per worker
     for that gap; it needs workers, as ``spin`` does), ``agent_lanes``
     (``"auto"``, the default, runs an environment's agent-lane step when it
-    has one, ADR-0100; ``"reference"`` always runs the reference step;
+    has one; ``"reference"`` always runs the reference step;
     outputs are identical either way), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
     two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
     ``"gathered"`` by default or ``"indexed"``); see ``Env``. Tag also
