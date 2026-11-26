@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use tessera_rl_num::identity::Seed;
 
+use crate::agent_lanes::AgentLanes;
 use crate::buffer::OutputAllocator;
 use crate::error::EngineError;
 use crate::masks::IllegalActionPolicy;
@@ -66,6 +67,12 @@ pub struct PoolOptions {
     /// construction, never a silent fallback. Ignored by environments
     /// without a lane step.
     pub simd_level: Option<tessera_rl_simd::Level>,
+    /// Whether the pool takes an environment's agent-lane step (ADR-0100
+    /// decision 1.6): `Auto`, the default, takes it when the environment is
+    /// eligible; `Reference` always runs the reference step. It changes
+    /// speed only, never results, and is ignored by environments without
+    /// `Environment::AGENT_LANE`.
+    pub agent_lanes: AgentLanes,
     /// Where the output storage comes from (ADR-0084): `None`, the default,
     /// is the engine's own allocation; `Some` asks this allocator once, at
     /// construction, for the whole storage. Never changes what a step
@@ -91,6 +98,7 @@ impl core::fmt::Debug for PoolOptions {
             .field("mask_budget_bytes", &self.mask_budget_bytes)
             .field("schedule", &self.schedule)
             .field("simd_level", &self.simd_level)
+            .field("agent_lanes", &self.agent_lanes)
             .field("output_allocator", &self.output_allocator.is_some())
             .finish()
     }
@@ -117,6 +125,7 @@ impl PartialEq for PoolOptions {
             mask_budget_bytes,
             schedule,
             simd_level,
+            agent_lanes,
             output_allocator,
         } = self;
         let allocators = match (output_allocator, &other.output_allocator) {
@@ -138,6 +147,7 @@ impl PartialEq for PoolOptions {
             && *mask_budget_bytes == other.mask_budget_bytes
             && *schedule == other.schedule
             && *simd_level == other.simd_level
+            && *agent_lanes == other.agent_lanes
             && allocators
     }
 }
@@ -192,6 +202,7 @@ impl PoolOptions {
             mask_budget_bytes: DEFAULT_MASK_BUDGET,
             schedule: Schedule::Static,
             simd_level: None,
+            agent_lanes: AgentLanes::Auto,
             output_allocator: None,
         }
     }

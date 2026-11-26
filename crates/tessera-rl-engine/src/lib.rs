@@ -11,6 +11,9 @@
 //! views for workers) and `sys` (the worker gang, and the live-watch slot).
 
 mod adaptive;
+#[cfg(test)]
+mod agent_lane_tests;
+mod agent_lanes;
 mod archive;
 mod buffer;
 #[cfg(test)]
@@ -71,6 +74,7 @@ pub mod rings {
     pub use crate::sys::ring::{CompletionRing, RingError, Signal, SubmitRing};
 }
 
+pub use agent_lanes::AgentLanes;
 #[cfg(not(loom))]
 pub use buffer::batch::{BatchRow, BatchToken, BatchWaiter};
 #[cfg(not(loom))]

@@ -383,6 +383,7 @@ def make_survival(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     agents: int | None = None,
     size: int | None = None,
     steps: int | None = None,

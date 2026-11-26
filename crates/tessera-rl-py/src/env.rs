@@ -1418,6 +1418,9 @@ pub(crate) struct PoolArgs {
     /// How chunks are given to workers: `"static"` (the default) or
     /// `"dynamic"` (ADR-0076). Never changes what a step computes.
     pub(crate) schedule: String,
+    /// Whether the pool takes an environment's agent-lane step (ADR-0100
+    /// decision 1.6): `"auto"` (the default, `None`) or `"reference"`.
+    pub(crate) agent_lanes: Option<String>,
     /// Worker threads; `None` (not given) is the engine default,
     /// [`tessera_rl_engine::default_workers`] (SPEC 6.1).
     pub(crate) workers: Option<usize>,
@@ -1553,6 +1556,15 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
         }
     };
     options.simd_level = simd_level(std::env::var("TESSERA_RL_SIMD").ok().as_deref())?;
+    options.agent_lanes = match args.agent_lanes.as_deref() {
+        None | Some("auto") => tessera_rl_engine::AgentLanes::Auto,
+        Some("reference") => tessera_rl_engine::AgentLanes::Reference,
+        Some(other) => {
+            return Err(BindError::Argument(format!(
+                "agent_lanes must be auto or reference, not {other:?}"
+            )));
+        }
+    };
     let n = usize::try_from(args.num_envs)
         .map_err(|_| BindError::Argument("num_envs too large".to_owned()))?;
     Ok((options, n))
@@ -2480,6 +2492,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             schedule: "static".to_owned(),
+            agent_lanes: None,
             workers: Some(0),
             spin: None,
             wait: None,
@@ -2585,6 +2598,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             schedule: "static".to_owned(),
+            agent_lanes: None,
             workers: Some(0),
             spin: None,
             wait: None,
@@ -2610,6 +2624,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             schedule: "static".to_owned(),
+            agent_lanes: None,
             workers,
             spin,
             wait: None,
@@ -2842,6 +2857,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             schedule: "static".to_owned(),
+            agent_lanes: None,
             workers: Some(0),
             spin: None,
             wait: None,

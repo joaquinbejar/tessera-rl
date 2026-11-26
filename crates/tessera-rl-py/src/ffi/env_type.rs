@@ -379,7 +379,7 @@ pub(super) const MAKERS: [FunctionRow; 22] = [
     FunctionRow::kw::<MakeVrp>(c"make_vrp", c"make_vrp($module, *, customers=None, vehicles=None, grid=None, max_demand=None, capacity=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None))\n--\n\nmake_vrp(*, customers=20, vehicles=1, grid=100, max_demand=9, capacity=30, **pool_options) -> Env"),
     FunctionRow::kw::<MakeSurvival>(
         c"make_survival",
-        c"make_survival($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, size=None, steps=None, view=None, respawn=None, forest_regrow=None, water_permille=None, forest_permille=None, stone_permille=None)\n--\n\nmake_survival(**pool_options, **survival_config) -> Env",
+        c"make_survival($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, agents=None, size=None, steps=None, view=None, respawn=None, forest_regrow=None, water_permille=None, forest_permille=None, stone_permille=None)\n--\n\nmake_survival(**pool_options, **survival_config) -> Env",
     ),
 ];
 
