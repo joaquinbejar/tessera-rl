@@ -12,6 +12,10 @@
 //! - Whole step: a pool of `SurvivalLanes` (the agent-lane step) against a
 //!   pool of `Survival` with `AgentLanes::Reference`, step by step: every
 //!   instance's state, rewards, flags and observation bytes.
+//! - Whole step on stressed states: `lanes::step` against `Survival::step`
+//!   directly, from reachable states pushed to low food, water and health
+//!   and with dead agents due to respawn, so that starvation, kills and T5
+//!   respawns all happen; the test asserts that each one did.
 //! - Goldens: the same through Survival's golden scenarios, whose committed
 //!   per-step output digests both pools reproduce. The record-hash fields
 //!   are not compared: they hash the record's environment id, which the
@@ -19,8 +23,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::panic,
-    clippy::indexing_slicing,
     reason = "test scenarios: a failure is the assertion"
 )]
 
@@ -30,12 +32,14 @@ mod survival_lanes_env;
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use survival_lanes_env::SurvivalLanes;
-use tessera_rl_core::Environment;
 use tessera_rl_core::encoding::checksum;
+use tessera_rl_core::io::Actions;
+use tessera_rl_core::{Bool8, Environment, StepOut};
 use tessera_rl_engine::{
     ActionInput, AgentLanes, AutoReset, EnvPool, NoMasks, Outputs, PoolOptions, Reseed, SyncOptions,
 };
-use tessera_rl_num::identity::Seed;
+use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
+use tessera_rl_num::rng::{RngAuthority, StepRng};
 use tessera_rl_simd::Resolved;
 use tessera_rl_world::survival::{
     ATTACK, DRINK, FORAGE, MAX_AGENTS, MAX_HEALTH, MAX_STOCK, STARVE, lanes, toward,
@@ -443,4 +447,108 @@ fn test_survival_lanes_reproduce_the_golden_outputs() {
             }
         }
     }
+}
+
+/// One instance stepped by `step` from `s` with `discrete`: the state, the
+/// rewards, the died, spawned, terminated and truncated rows, and the end.
+type Stepped = (
+    SurvivalState,
+    Vec<f32>,
+    Vec<[bool; 4]>,
+    Option<tessera_rl_core::EpisodeEnd>,
+);
+
+fn one_step(
+    cfg: &SurvivalConfig,
+    s: &SurvivalState,
+    discrete: &[i32],
+    seed: u64,
+    lanes_at: Option<Resolved>,
+) -> Stepped {
+    let mut state = *s;
+    let identity = RngIdentity::new(Seed::new(seed), LogicalId::new(0));
+    let mut rng = StepRng::new(&RngAuthority::engine_only(), &identity, StreamId::DYNAMICS);
+    let (mut rewards, mut term, mut trunc, mut died, mut spawned) = (
+        vec![0.0f32; MAX_AGENTS],
+        vec![Bool8::FALSE; MAX_AGENTS],
+        vec![Bool8::FALSE; MAX_AGENTS],
+        vec![Bool8::FALSE; MAX_AGENTS],
+        vec![Bool8::FALSE; MAX_AGENTS],
+    );
+    let mut out = StepOut::new(&mut rewards, &mut term, &mut trunc, &mut died, &mut spawned);
+    let actions = Actions::<()>::new(discrete, 2, &[], 0);
+    match lanes_at {
+        None => Survival::step(cfg, &mut state, &actions, &mut rng, &mut out),
+        Some(level) => lanes::step(cfg, &mut state, &actions, &mut rng, &mut out, level),
+    }
+    let end = out.episode_end();
+    let rows = died
+        .iter()
+        .zip(&spawned)
+        .zip(&term)
+        .zip(&trunc)
+        .map(|(((d, s), t), u)| [d.get(), s.get(), t.get(), u.get()])
+        .collect();
+    (state, rewards, rows, end)
+}
+
+/// `s` pushed towards the rare rules: low stocks and health for the live
+/// agents, and every fifth live agent dead and due to respawn.
+fn stressed(s: &SurvivalState, seed: u64) -> SurvivalState {
+    let mut t = *s;
+    for a in 0..t.agent_count() {
+        if !t.is_alive(a) {
+            continue;
+        }
+        let key = seed ^ (u64::try_from(a).unwrap() << 12);
+        if a % 5 == 4 {
+            t.alive[a] = Bool8::FALSE;
+            t.dead_for[a] = 2;
+            continue;
+        }
+        t.food[a] = i16::try_from(below(key, 3)).unwrap();
+        t.water[a] = i16::try_from(below(key ^ 2, 3)).unwrap();
+        t.health[a] = 1 + i16::try_from(below(key ^ 3, 40)).unwrap();
+    }
+    t
+}
+
+#[test]
+fn test_survival_lanes_whole_step_on_stressed_states_equals_the_reference() {
+    // A crowded map, so attacks meet their targets.
+    let crowded = SurvivalConfig {
+        agents: 128,
+        size: 24,
+        steps: 64,
+        respawn: 2,
+        ..SurvivalConfig::default()
+    };
+    let (mut starved, mut kills, mut respawns) = (false, false, false);
+    for (c, cfg) in [config(21, 40), crowded].iter().enumerate() {
+        for (k, s0) in states(cfg, 40 + u64::try_from(c).unwrap(), 30)
+            .iter()
+            .enumerate()
+            .step_by(3)
+        {
+            let seed = u64::try_from(c * 1000 + k).unwrap();
+            let mut s = stressed(s0, seed);
+            for t in 1..=12 {
+                let acts = random_actions(seed, t, 1);
+                let want = one_step(cfg, &s, &acts, seed + u64::from(t), None);
+                starved |= (0..s.agent_count())
+                    .any(|a| s.is_alive(a) && (s.food[a] <= 1 || s.water[a] <= 1));
+                kills |= (0..s.agent_count()).any(|a| want.0.kills[a] > s.kills[a]);
+                respawns |= want.2.iter().any(|r| r[1]);
+                for level in Resolved::available() {
+                    let got = one_step(cfg, &s, &acts, seed + u64::from(t), Some(level));
+                    assert_eq!(got, want, "config {c}, state {k}, step {t}, {level:?}");
+                }
+                s = want.0;
+            }
+        }
+    }
+    assert!(
+        starved && kills && respawns,
+        "starved={starved} kills={kills} respawns={respawns}"
+    );
 }
