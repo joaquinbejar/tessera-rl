@@ -647,7 +647,7 @@ def _fake_git(monkeypatch, tmp_path, head=None, rev="unknown", status="unknown")
 
 def test_source_archive_with_head_returns_head_clean(monkeypatch, tmp_path):
     _fake_git(monkeypatch, tmp_path, head=_A)
-    assert bench._source() == (_A, False)
+    assert bench._source() == (_A, False, ".head")
 
 
 def test_source_no_checkout_no_head_raises(monkeypatch, tmp_path):
@@ -665,9 +665,9 @@ def test_source_malformed_head_raises(monkeypatch, tmp_path, bad):
 
 def test_source_checkout_returns_commit_and_dirty(monkeypatch, tmp_path):
     _fake_git(monkeypatch, tmp_path, rev=_A, status="")
-    assert bench._source() == (_A, False)
+    assert bench._source() == (_A, False, "checkout")
     _fake_git(monkeypatch, tmp_path, rev=_A, status=" M x")
-    assert bench._source() == (_A, True)
+    assert bench._source() == (_A, True, "checkout")
 
 
 def test_source_head_disagreeing_with_checkout_raises(monkeypatch, tmp_path):
@@ -680,3 +680,20 @@ def test_source_checkout_status_failure_raises(monkeypatch, tmp_path):
     _fake_git(monkeypatch, tmp_path, rev=_A, status="unknown")
     with pytest.raises(RuntimeError, match="git status failed"):
         bench._source()
+
+
+def test_source_environment_records_git_source(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path, head=_A)
+    software = bench.environment(None)["software"]
+    assert (software["git"], software["git_dirty"], software["git_source"]) == (_A, False, ".head")
+
+
+def test_run_unknown_commit_raises_before_any_runner_call(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(bench, "runner_path", lambda *a, **k: calls.append("build") or tmp_path / "runner")
+    monkeypatch.setattr(bench, "_run_runner", lambda argv: calls.append("run"))
+    monkeypatch.setattr(bench, "load", lambda *a, **k: calls.append("load") or ({"config": []}, {}))
+    with pytest.raises(RuntimeError, match="commit is unknown"):
+        bench.run(quick=True, profile="debug")
+    assert calls == []

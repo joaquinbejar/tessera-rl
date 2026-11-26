@@ -296,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import bench  # noqa: PLC0415
+    source = bench._source()  # fail before measuring when the commit is unknown (#640)
 
     spec, method = bench.load(quick=args.quick)
     configs = {c["name"]: c for c in spec["config"]}
@@ -317,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "tessera-nightly/1",
         "machine": args.machine,
         "binding": binding,
-        "environment": bench.environment(args.machine),
+        "environment": bench.environment(args.machine, source),
         "pinning": pin,
         "load": load,
         "verdict": verdict,

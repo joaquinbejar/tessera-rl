@@ -146,9 +146,11 @@ def _run(cmd) -> str:
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
-def _source() -> tuple[str, bool]:
-    """(commit, dirty) of the measured source. A git checkout answers
-    itself; a source without one (a ``git archive`` unpacked for a host run)
+def _source() -> tuple[str, bool, str]:
+    """(commit, dirty, git_source) of the measured source; git_source is
+    ``"checkout"`` or ``".head"``. A git checkout answers itself (a source
+    inside an outer work tree without its own ``.head`` takes that outer
+    tree's commit); a source without one (a ``git archive`` unpacked for a host run)
     must carry ``.head`` at the root holding the full 40-hex SHA it was
     archived from, and is clean by construction. Neither, a malformed
     ``.head`` or one that disagrees with the checkout: ``RuntimeError``,
@@ -164,10 +166,10 @@ def _source() -> tuple[str, bool]:
         status = _run(["git", "status", "--porcelain"])
         if status == "unknown":
             raise RuntimeError("git status failed in the checkout")
-        return commit, status != ""
+        return commit, status != "", "checkout"
     if head is None:
         raise RuntimeError(f"the commit is unknown: no git checkout at {ROOT} and no .head")
-    return head, False
+    return head, False, ".head"
 
 
 def _cpu_model() -> str:
@@ -197,13 +199,16 @@ def machines() -> dict:
     return {k: v for k, v in spec.items() if isinstance(v, dict)}
 
 
-def environment(machine: str | None) -> dict:
+def environment(machine: str | None, source: tuple[str, bool, str] | None = None) -> dict:
+    """The report's environment. ``source`` is ``_source()`` resolved by the
+    caller before measuring (so a missing commit fails before the run);
+    ``None`` resolves it here."""
     import gymnasium
 
     import tessera_rl
     from tessera_rl import _native
 
-    commit, dirty = _source()
+    commit, dirty, git_source = source if source is not None else _source()
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
     return {
         "machine": machine,
@@ -221,6 +226,7 @@ def environment(machine: str | None) -> dict:
             "native_build_profile": _native.build_profile(),
             "git": commit,
             "git_dirty": dirty,
+            "git_source": git_source,
             "rustc": _run(["rustc", "--version"]),
             "python": platform.python_version(),
             "numpy": np.__version__,
@@ -672,6 +678,7 @@ def run(
     max_load5: float | None = None,
     load_wait_s: float | None = None,
 ) -> dict:
+    source = _source()  # fail before measuring when the commit is unknown (#640)
     spec, method = load(quick)
     configs = [c for c in spec["config"] if only is None or c["name"].startswith(only)]
     if not configs:
@@ -711,7 +718,7 @@ def run(
         "method": method,
         "pinning": pin,
         "qualification": qualification,
-        "environment": environment(machine),
+        "environment": environment(machine, source),
         "load_average": {"before": load_before, "after": load_average()},
         "results": results,
         "skipped": {name: "required package not installed" for name in skipped},
