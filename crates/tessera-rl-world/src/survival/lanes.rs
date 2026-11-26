@@ -17,7 +17,11 @@
 //! write back their old values.
 //!
 //! No `i32` lane operation here can wrap: positions are in `-1..=96`,
-//! stocks and health in `-85..=130`, counters at most 4,097.
+//! stocks and health in `-85..=130`, counters at most 4,097. Every value
+//! narrowed back with `to_i16` or `to_u16` is in range by these bounds and
+//! the selects that restore masked lanes; the narrowing debug-asserts each
+//! lane (`I32Lanes::to_i16`), so the debug runs of the differentials check
+//! it.
 
 use core::num::NonZeroU32;
 
@@ -573,10 +577,10 @@ pub fn step(
     level: Resolved,
 ) {
     let n = state.agent_count();
-    let (moves, acts) = (heads(actions, n, 0), heads(actions, n, 1));
+    let (dirs, acts) = (heads(actions, n, 0), heads(actions, n, 1));
     let start = *state;
     // 1. Moves: the targets in lanes, then T1 (copied from `mod.rs` 566-580).
-    let target = move_targets(level, &start, &moves);
+    let target = move_targets(level, &start, &dirs);
     for a in 0..n {
         let Some(&t) = target.get(a) else { continue };
         if !start.is_alive(a) || t == start.pos(a) {
@@ -599,6 +603,8 @@ pub fn step(
     for (a, &v) in victim.iter().enumerate().take(n) {
         let Ok(v) = usize::try_from(v) else { continue };
         if let Some(d) = damage.get_mut(v) {
+            // At most 4 attackers (one per neighbour tile) of `ATTACK` each:
+            // 80, no `i16` overflow.
             *d += ATTACK;
         }
         if let Some(h) = hit_by.get_mut(v).and_then(|r| r.get_mut(a)) {
