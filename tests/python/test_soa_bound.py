@@ -19,8 +19,11 @@ def load():
 
 
 def written(fid):
-    """Records the bench declares for an operation: N - 1 for the forks."""
-    return N - 1 if fid.split("/")[-1] in ("fork", "fork_branched") else N
+    """Records the bench declares for an operation: N - 1 for the forks, 1 for one-instance reports."""
+    op = fid.split("/")[-1]
+    if op in ("snapshot_one", "record_hash", "state_hash"):
+        return 1
+    return N - 1 if op in ("fork", "fork_branched") else N
 
 
 def case(root, group, fid, record_bytes, ns_per_instance, throughput=None):
@@ -87,6 +90,38 @@ def test_soa_bound_real_criterion_fork_shape_divides_by_destinations(tmp_path, c
     out = capsys.readouterr().out
     assert "aos_grid/fork: record 72 B, median 20.0 ns [19.0, 21.0], bound 70.3 ns, PASS" in out
     assert "per destination (8191 records)" in out
+
+
+# Verbatim from the #735 r4 run's criterion-raw.tar.gz (sha256 40ab2826...,
+# swarmer03, cfb36cd6): soa_snapshot_8192/soa_cartpole_snapshot_one, declared
+# over one 88-byte record. soa_bound refused it with rc 2 before this fix.
+R4_SNAPSHOT_ONE_BENCHMARK = '{"group_id":"soa_snapshot_8192","function_id":"soa_cartpole/snapshot_one","value_str":null,"throughput":{"Bytes":88},"full_id":"soa_snapshot_8192/soa_cartpole/snapshot_one","directory_name":"soa_snapshot_8192/soa_cartpole_snapshot_one","title":"soa_snapshot_8192/soa_cartpole/snapshot_one"}'
+R4_SNAPSHOT_ONE_ESTIMATES = '{"mean":{"confidence_interval":{"confidence_level":0.95,"lower_bound":28.204675462729135,"upper_bound":28.340752810263673},"point_estimate":28.271885386338816,"standard_error":0.03472662206966935},"median":{"confidence_interval":{"confidence_level":0.95,"lower_bound":28.087857035045634,"upper_bound":28.291421833651082},"point_estimate":28.1621995818778,"standard_error":0.05513449874432706},"median_abs_dev":{"confidence_interval":{"confidence_level":0.95,"lower_bound":0.26646872632595775,"upper_bound":0.5147552828837348},"point_estimate":0.3759220106738049,"standard_error":0.0708884693634493},"slope":{"confidence_interval":{"confidence_level":0.95,"lower_bound":28.112903857050533,"upper_bound":28.288772595084726},"point_estimate":28.196744999229033,"standard_error":0.045032550535412},"std_dev":{"confidence_interval":{"confidence_level":0.95,"lower_bound":0.31140594722771636,"upper_bound":0.38552548478033644},"point_estimate":0.3499253563100058,"standard_error":0.01885821703904091}}'
+
+
+def test_soa_bound_real_r4_snapshot_one_divides_by_one_record(tmp_path, capsys):
+    d = tmp_path / "soa_snapshot_8192" / "soa_cartpole_snapshot_one" / "new"
+    d.mkdir(parents=True)
+    (d / "benchmark.json").write_text(R4_SNAPSHOT_ONE_BENCHMARK)
+    (d / "estimates.json").write_text(R4_SNAPSHOT_ONE_ESTIMATES)
+    assert load().main([str(tmp_path), "--group", "soa_snapshot_8192", "--instances", str(N)]) == 0
+    out = capsys.readouterr().out
+    assert "soa_cartpole/snapshot_one: record 88 B, median 28.2 ns [28.1, 28.3], bound 85.9 ns, report" in out
+
+
+def test_soa_bound_report_only_declared_over_all_instances_is_refused(tmp_path, capsys):
+    case(tmp_path, "g", "soa_cartpole/snapshot_all", 88, 4.0)
+    case(tmp_path, "g", "soa_cartpole/state_hash", 88, 80.0, throughput={"Bytes": 88 * N})
+    assert load().main([str(tmp_path), "--group", "g", "--instances", str(N)]) == 2
+    assert "disagree on the record size" in capsys.readouterr().err
+
+
+def test_soa_bound_cases_of_one_env_agree_on_record_size(tmp_path):
+    case(tmp_path, "g", "soa_cartpole/snapshot_all", 88, 4.0)
+    case(tmp_path, "g", "soa_cartpole/fork", 88, 40.0)
+    case(tmp_path, "g", "soa_cartpole/state_hash", 88, 80.0)
+    case(tmp_path, "g", "aos_cartpole/snapshot_all", 96, 4.0)
+    assert load().main([str(tmp_path), "--group", "g", "--instances", str(N)]) == 0
 
 
 def test_soa_bound_fork_declared_over_all_instances_is_refused(tmp_path):

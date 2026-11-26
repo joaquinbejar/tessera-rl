@@ -7,8 +7,9 @@
 Reads Criterion's results for one benchmark group
 (`<criterion dir>/<group>/<case>/new/{benchmark,estimates}.json`). Each case
 declares its throughput as `size_of::<Record<E>>()` bytes times the records it
-writes: `instances` for most operations, `instances - 1` for `fork` and
-`fork_branched` (one record per destination; the source is not written). The
+writes: `instances` for `snapshot_all` and `restore`, `instances - 1` for
+`fork` and `fork_branched` (one record per destination; the source is not
+written), and 1 for the report-only operations on one instance. The
 record size is recovered exactly as throughput / that count, and the medians
 are per record written. For every case it
 prints the record bytes, the per-instance median and 95% interval in ns, and
@@ -31,8 +32,14 @@ BOUNDED = ("snapshot_all", "fork", "fork_branched", "restore")
 TO_DESTINATIONS = ("fork", "fork_branched")
 
 
+# Report-only operations on one instance: their throughput is one record.
+ONE_RECORD = ("snapshot_one", "record_hash", "state_hash")
+
+
 def records_written(op: str, instances: int) -> int:
     """The records an operation writes, the divisor of its declared throughput."""
+    if op in ONE_RECORD:
+        return 1
     return instances - 1 if op in TO_DESTINATIONS else instances
 
 
@@ -83,6 +90,15 @@ def report(criterion: pathlib.Path, group: str, instances: int) -> tuple[list[st
     )
     if not rows:
         raise InputError(f"{gdir}: no cases")
+    # Every case of one environment declares the same record: a mismatch means
+    # a throughput declared over the wrong count (a one-record divisor alone
+    # accepts any byte count).
+    sizes: dict[str, set[int]] = {}
+    for r in rows:
+        sizes.setdefault(r["env"], set()).add(r["record_bytes"])
+    for env, s in sorted(sizes.items()):
+        if len(s) != 1:
+            raise InputError(f"{gdir}: {env} cases disagree on the record size {sorted(s)}")
     ok = True
     out = [
         f"group {group}, {instances} instances; bound = record bytes / 1024 us per record written (ADR-0010);"
