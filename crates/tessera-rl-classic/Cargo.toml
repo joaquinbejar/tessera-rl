@@ -65,6 +65,11 @@ harness = false
 name = "grid_observe"
 harness = false
 
+# The pixel observe cost of BrickWall, its state observation as the control (#755).
+[[bench]]
+name = "brickwall_observe"
+harness = false
+
 # The live watch acceptance benchmark (ADR-0083 item 7, #378 4d).
 [[bench]]
 name = "watch_step"
