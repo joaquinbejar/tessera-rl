@@ -347,11 +347,11 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
         }
     }
 
-    /// The views of the instances in `r`.
+    /// [`Self::chunk_on`] with no worker scratch.
     ///
     /// # Safety
     ///
-    /// Module invariants; in particular no other live view covers `r`.
+    /// As [`Self::chunk_on`].
     #[cfg(test)]
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
     unsafe fn chunk<'a>(&self, r: &Range<usize>) -> Rows<'a, H, S, T> {
@@ -359,12 +359,14 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
         unsafe { self.chunk_on(r, None) }
     }
 
-    /// [`Self::chunk`] run by `worker`, which gets its transform scratch.
+    /// The views of the instances in `r`, run by `worker`, which gets its
+    /// transform scratch (`None`: no scratch is handed out).
     ///
     /// # Safety
     ///
-    /// As [`Self::chunk`]; besides, `worker`'s scratch is used by no other
-    /// live view (each worker runs one view at a time).
+    /// Module invariants; in particular no other live view covers `r`, and
+    /// `worker`'s scratch is used by no other live view (each worker runs one
+    /// view at a time).
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
     unsafe fn chunk_on<'a>(&self, r: &Range<usize>, worker: Option<usize>) -> Rows<'a, H, S, T> {
         let a = self.agents;

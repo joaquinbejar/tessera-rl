@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly facade-api facade-api-bless py-api py-api-bless py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc doc-private readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly facade-api facade-api-bless py-api py-api-bless py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -35,13 +35,20 @@ test:
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 
+# The private-item docs of the crates with audited `unsafe`: their SAFETY
+# arguments sit in private modules, which `doc` never renders, so a broken
+# link there would go unnoticed.
+doc-private:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked --document-private-items \
+		-p tessera-rl-simd -p tessera-rl-num -p tessera-rl-core -p tessera-rl-engine -p tessera-rl-pyffi -p tessera-rl-onnx
+
 readme:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings > README.md
 
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly facade-api py-api py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels py-typecheck dashboard-check simd-disasm fuzz-check
+pre-push: fmt-check clippy test doc doc-private readme-check compat-test py-entries pyffi-api-if-nightly facade-api py-api py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels py-typecheck dashboard-check simd-disasm fuzz-check
 
 # The audited ONNX Runtime version read against the real library (ADR-0057).
 # ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
