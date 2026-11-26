@@ -452,6 +452,22 @@ def make_grid(
     size: int | None = None,
     max_steps: int | None = None,
 ) -> Env: ...
+def make_grid_lanes(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    size: int | None = None,
+    max_steps: int | None = None,
+) -> Env: ...
 def make_keydoor(
     *,
     mode: str | None = None,

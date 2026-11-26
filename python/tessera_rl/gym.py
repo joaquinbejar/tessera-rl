@@ -75,6 +75,7 @@ _MAKERS = {
     "tessera/Acrobot-v1": _native.make_acrobot,
     "tessera/Pendulum-v1": _native.make_pendulum,
     "tessera/Grid-v1": _native.make_grid,
+    "tessera/GridLanes-v1": _native.make_grid_lanes,
     "tessera/Gather-v1": _native.make_gather,
     "tessera/BrickWall-v1": _native.make_brickwall,
     "tessera/Snake-v1": _native.make_snake,

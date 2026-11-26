@@ -304,6 +304,7 @@ maker!(MakeRts, api::make_rts, "make_rts");
 maker!(MakeLob, api::make_lob, "make_lob");
 maker!(MakeSurvival, api::make_survival, "make_survival");
 maker!(MakeGrid, api::make_grid, "make_grid");
+maker!(MakeGridLanes, api::make_grid_lanes, "make_grid_lanes");
 maker!(MakeKeydoor, api::make_keydoor, "make_keydoor");
 maker!(MakeGather, api::make_gather, "make_gather");
 maker!(MakeSnake, api::make_snake, "make_snake");
@@ -318,7 +319,7 @@ maker!(MakeOthello, api::make_othello, "make_othello");
 maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
-pub(super) const MAKERS: [FunctionRow; 21] = [
+pub(super) const MAKERS: [FunctionRow; 22] = [
     FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
     FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
@@ -349,6 +350,10 @@ pub(super) const MAKERS: [FunctionRow; 21] = [
     FunctionRow::kw::<MakeGrid>(
         c"make_grid",
         c"make_grid($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None)\n--\n\nmake_grid(**pool_options, size=16, max_steps=200) -> Env",
+    ),
+    FunctionRow::kw::<MakeGridLanes>(
+        c"make_grid_lanes",
+        c"make_grid_lanes($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None)\n--\n\nmake_grid_lanes(**pool_options, size=16, max_steps=200) -> Env; chunk_size must be a multiple of 8, mode=\"async\" is refused",
     ),
     FunctionRow::kw::<MakeKeydoor>(
         c"make_keydoor",

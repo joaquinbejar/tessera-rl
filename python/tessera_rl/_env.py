@@ -1154,6 +1154,7 @@ def make(
         "tessera/RTS-v1": _native.make_rts,
         "tessera/LimitOrderBook-v1": _native.make_lob,
         "tessera/Grid-v1": _native.make_grid,
+        "tessera/GridLanes-v1": _native.make_grid_lanes,
         "tessera/GridKeyDoor-v1": _native.make_keydoor,
         "tessera/Gather-v1": _native.make_gather,
         "tessera/Snake-v1": _native.make_snake,
