@@ -355,13 +355,12 @@ mod tests {
         let mut v = unsafe { <F as LaneTuple>::view(raw, &(8..16)) };
         <F as LaneTuple>::view_set(&mut v, 0, (1.0, 1, 1));
         // SAFETY: the columns are alive and not reallocated; no write to
-        // row 3 runs concurrently.
-        assert_eq!(
-            unsafe { <F as LaneTuple>::read(raw, 3) },
-            Some((2.5, 7, -1))
-        );
+        // row 3 runs concurrently, and no `&mut` covers it.
+        let row3 = unsafe { <F as LaneTuple>::read(raw, 3) };
         // SAFETY: as above; row 16 is past the columns, so `None`.
-        assert_eq!(unsafe { <F as LaneTuple>::read(raw, 16) }, None);
+        let past = unsafe { <F as LaneTuple>::read(raw, 16) };
+        assert_eq!(row3, Some((2.5, 7, -1)));
+        assert_eq!(past, None);
         assert_eq!(<F as LaneTuple>::view_get(&v, 0), Some((1.0, 1, 1)));
     }
 
