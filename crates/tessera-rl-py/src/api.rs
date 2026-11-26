@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 24] = [
+const POOL_KEYS: [&str; 25] = [
     "mode",
     "batch_size",
     "gather",
@@ -115,6 +115,7 @@ const POOL_KEYS: [&str; 24] = [
     "auto_reset",
     "chunk_size",
     "schedule",
+    "agent_lanes",
     "workers",
     "spin",
     "wait",
@@ -270,6 +271,7 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
         schedule: kw
             .string(g, "schedule")?
             .unwrap_or_else(|| "static".to_owned()),
+        agent_lanes: kw.string(g, "agent_lanes")?,
         workers: kw
             .u32(g, "workers")?
             .map(|w| usize::try_from(w).unwrap_or(usize::MAX)),

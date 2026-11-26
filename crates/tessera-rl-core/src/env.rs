@@ -7,6 +7,7 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 
 use crate::adapters::Adapters;
 use crate::agent::{AgentSlot, Tier, TurnStructure};
+use crate::agent_lane::AgentLaneHook;
 use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
 use crate::header::RecordLayout;
@@ -121,6 +122,15 @@ pub trait Environment: Sized + 'static {
     /// `None` (the default) steps every instance through
     /// [`Environment::step`] on a gathered copy.
     const LANE_ENV: Option<crate::lane_env::LaneEnvHooks<Self>> = None;
+
+    /// The agent-lane step (ADR-0100 decision 1.5): lane kernels over the
+    /// agents of one instance, called in place of
+    /// [`Environment::step_with`] at the pool's resolved SIMD level.
+    /// `None` (the default) always runs the reference step. An environment
+    /// sets at most one of `LANE_STEP`, `LANE_ENV` and `AGENT_LANE`, and a
+    /// lane-wise state never sets `AGENT_LANE`; building a pool checks both
+    /// at compile time.
+    const AGENT_LANE: Option<AgentLaneHook<Self>> = None;
 
     /// The observation space for `cfg`.
     ///

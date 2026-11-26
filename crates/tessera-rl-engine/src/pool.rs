@@ -135,6 +135,9 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// lane step or its shape is not eligible (ADR-0071); fixed at
     /// construction.
     pub(crate) lanes: Option<Resolved>,
+    /// The level of the agent-lane step, or `None` when the pool runs the
+    /// reference step (ADR-0100 decision 1.5); fixed at construction.
+    pub(crate) agent_lanes: Option<Resolved>,
     sync: Option<SyncRuntime>,
     /// The live watch, if attached (ADR-0083 item 7): served at each batch
     /// boundary; `None` costs one pointer test per call.
@@ -210,6 +213,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             auto_reset: self.options.auto_reset,
             archive: self.reset_source.as_ref(),
             lanes: self.lanes,
+            agent_lanes: self.agent_lanes,
             targets: self.targets.as_deref(),
             #[cfg(feature = "debug-checks")]
             allocs: &self.allocs,
@@ -545,6 +549,12 @@ where
                 !(E::State::LANES && E::LANE_ENV.is_some() && E::LANE_STEP.is_some()),
                 "a lane-wise state sets LANE_ENV, never also LANE_STEP (ADR-0090 (erratum, #345 head 3))"
             );
+            // An environment takes at most one lane path, and a lane-wise
+            // state never the agent-lane step (ADR-0100 decisions 1.2, 1.4).
+            assert!(
+                agent_lane_exclusive::<E>(),
+                "AGENT_LANE excludes LANE_STEP, LANE_ENV and a lane-wise state (ADR-0100 decision 1.4)"
+            );
         }
         cfg.validate()?;
         if let Some((id, d)) = tessera_rl_core::envs::deprecation_of::<E>() {
@@ -570,6 +580,7 @@ where
         action_space.validate()?;
         let mut actions = ActionLayout::from_space(&action_space)?;
         let lanes = lane_level::<E, M>(&options, &actions)?;
+        let agent_lanes = agent_lane_level::<E>(&options)?;
         let leaves = obs_leaves(&obs_space)?;
 
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
@@ -633,6 +644,7 @@ where
             fast_clean: false,
             counter_bound: Some(0),
             lanes,
+            agent_lanes,
             sync: None,
             watch: None,
             transform: None,
@@ -1329,6 +1341,7 @@ where
             league,
             targets,
             lanes,
+            agent_lanes,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -1345,6 +1358,7 @@ where
             auto_reset: options.auto_reset,
             archive: reset_source.as_ref(),
             lanes: *lanes,
+            agent_lanes: *agent_lanes,
             targets: targets.as_deref(),
             #[cfg(feature = "debug-checks")]
             allocs,
@@ -1684,6 +1698,9 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     /// The lane path's level; `None` steps every instance through
     /// `Environment::step_with` (ADR-0071).
     pub(crate) lanes: Option<Resolved>,
+    /// The agent-lane step's level; `None` runs `Environment::step_with`
+    /// (ADR-0100 decision 1.5).
+    pub(crate) agent_lanes: Option<Resolved>,
     /// The curriculum targets, one per instance slot, copied into a header
     /// at its reset (ADR-0081 item 5.3); `None` without targets. Read-only
     /// during a pass.
@@ -2087,6 +2104,37 @@ fn lane_level<E: Environment, M: MaskProvider<E>>(
     Ok(eligible.then_some(level))
 }
 
+/// Whether an environment's lane hooks are compatible with its agent-lane
+/// hook (ADR-0100 decisions 1.2 and 1.4): without `AGENT_LANE`, always;
+/// with it, only on an Array-of-Structs state that sets neither `LANE_STEP`
+/// nor `LANE_ENV`. Building a pool asserts it at compile time; tests call it
+/// directly, since the assertion makes the other case unbuildable.
+#[must_use]
+pub(crate) const fn agent_lane_exclusive<E: Environment>() -> bool {
+    E::AGENT_LANE.is_none() || (!E::State::LANES && E::LANE_STEP.is_none() && E::LANE_ENV.is_none())
+}
+
+/// The agent-lane step's level for a pool (ADR-0100 decision 1.5), or
+/// `None` when the pool runs the reference step: the environment sets no
+/// hook, `agent_lanes` is `Reference`, it reads its adaptive values (the
+/// hook receives none), or its state is lane-wise. The level follows
+/// `lane_level`'s rule, so an unavailable forced level is an error even
+/// then. Multi-agent, masks and several action heads are allowed: the hook
+/// takes the step's own actions.
+fn agent_lane_level<E: Environment>(
+    options: &PoolOptions,
+) -> Result<Option<Resolved>, EngineError> {
+    let level = match options.simd_level {
+        Some(level) => Resolved::force(level)?,
+        None => Resolved::best(),
+    };
+    let eligible = E::AGENT_LANE.is_some()
+        && options.agent_lanes == crate::agent_lanes::AgentLanes::Auto
+        && !E::READS_ADAPTIVE
+        && !E::State::LANES;
+    Ok(eligible.then_some(level))
+}
+
 /// Observes instance `i` after its step and runs the same-step auto-reset,
 /// shared by the scalar and the lane path.
 fn after_step<E: Environment, M: MaskProvider<E>>(
@@ -2120,7 +2168,8 @@ fn after_step<E: Environment, M: MaskProvider<E>>(
     }
 }
 
-/// Resets or steps instance `i` through `Environment::step_with`.
+/// Resets or steps instance `i` through `Environment::step_with`, or its
+/// agent-lane step when the pool takes it (ADR-0100 decision 1.5).
 #[expect(
     clippy::too_many_arguments,
     reason = "one instance's scalar step, split out of the loop"
@@ -2144,6 +2193,7 @@ fn scalar_one<E: Environment, M: MaskProvider<E>>(
         limit,
         archive,
         targets,
+        agent_lanes,
         ..
     } = *ctx;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
@@ -2195,7 +2245,12 @@ fn scalar_one<E: Environment, M: MaskProvider<E>>(
         marked,
         |state, adaptive, identity, out| {
             let mut rng = StepRng::new(authority, identity, StreamId::DYNAMICS);
-            E::step_with(cfg, adaptive, state, &view, &mut rng, out);
+            match (agent_lanes, E::AGENT_LANE) {
+                (Some(level), Some(hook)) => {
+                    hook(cfg, adaptive, state, &view, &mut rng, out, level);
+                }
+                _ => E::step_with(cfg, adaptive, state, &view, &mut rng, out),
+            }
         },
         update_acting::<E>,
     );

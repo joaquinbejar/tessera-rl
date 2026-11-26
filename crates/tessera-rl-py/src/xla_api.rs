@@ -317,6 +317,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             schedule: "static".to_owned(),
+            agent_lanes: None,
             workers: Some(0),
             spin: None,
             wait: None,

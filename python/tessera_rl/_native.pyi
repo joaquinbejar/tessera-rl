@@ -188,6 +188,7 @@ def make_cartpole(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_acrobot(
     *,
@@ -202,6 +203,7 @@ def make_acrobot(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_mountaincar(
     *,
@@ -216,6 +218,7 @@ def make_mountaincar(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_pendulum(
     *,
@@ -230,6 +233,7 @@ def make_pendulum(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_tag(
     *,
@@ -244,6 +248,7 @@ def make_tag(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     width: int | None = None,
     height: int | None = None,
     pursuers: int | None = None,
@@ -264,6 +269,7 @@ def make_rts(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     size: int | None = None,
     decision_ticks: int | None = None,
     max_units: int | None = None,
@@ -284,6 +290,7 @@ def make_lob(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     agents: int | None = None,
     steps: int | None = None,
     depth: int | None = None,
@@ -317,6 +324,7 @@ def make_connect4(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_lanterns(
     *,
@@ -333,6 +341,7 @@ def make_lanterns(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_jobshop(
     *,
@@ -350,6 +359,7 @@ def make_jobshop(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_vrp(
     *,
@@ -369,6 +379,7 @@ def make_vrp(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_survival(
     *,
@@ -383,6 +394,7 @@ def make_survival(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     agents: int | None = None,
     size: int | None = None,
     steps: int | None = None,
@@ -406,6 +418,7 @@ def make_leduc(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_othello(
     *,
@@ -420,6 +433,7 @@ def make_othello(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
 ) -> Env: ...
 def make_go9(
     *,
@@ -434,6 +448,7 @@ def make_go9(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     komi_half_points: int | None = None,
 ) -> Env: ...
 def make_grid(
@@ -449,6 +464,7 @@ def make_grid(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     size: int | None = None,
     max_steps: int | None = None,
     layout: str | bytes | bytearray | None = None,
@@ -466,6 +482,7 @@ def make_grid_lanes(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     size: int | None = None,
     max_steps: int | None = None,
     layout: str | bytes | bytearray | None = None,
@@ -483,6 +500,7 @@ def make_keydoor(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     size: int | None = None,
     agents: int | None = None,
 ) -> Env: ...
@@ -499,6 +517,7 @@ def make_gather(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     size: int | None = None,
     items: int | None = None,
     max_steps: int | None = None,
@@ -517,6 +536,7 @@ def make_snake(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     size: int | None = None,
     agents: int | None = None,
     obs: str | None = None,
@@ -534,6 +554,7 @@ def make_brickwall(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     frameskip: int | None = None,
     lives: int | None = None,
     obs: str | None = None,
@@ -551,6 +572,7 @@ def make_paddleduel(
     workers: int | None = None,
     spin: int | None = None,
     outputs: str | None = None,
+    agent_lanes: str | None = None,
     agents: int | None = None,
     frameskip: int | None = None,
     max_score: int | None = None,

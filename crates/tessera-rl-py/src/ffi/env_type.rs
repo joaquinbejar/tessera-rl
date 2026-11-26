@@ -320,66 +320,66 @@ maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
 pub(super) const MAKERS: [FunctionRow; 22] = [
-    FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
-    FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
         c"make_mountaincar",
-        c"make_mountaincar($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_mountaincar(**pool_options) -> Env",
+        c"make_mountaincar($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_mountaincar(**pool_options) -> Env",
     ),
-    FunctionRow::kw::<MakePendulum>(c"make_pendulum", c"make_pendulum($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_pendulum(**pool_options) -> Env"),
+    FunctionRow::kw::<MakePendulum>(c"make_pendulum", c"make_pendulum($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_pendulum(**pool_options) -> Env"),
     FunctionRow::kw::<MakeTag>(
         c"make_tag",
-        c"make_tag($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, width=None, height=None, pursuers=None, evaders=None, slip=None, radius=None)\n--\n\nmake_tag(**pool_options, **tag_config) -> Env",
+        c"make_tag($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, width=None, height=None, pursuers=None, evaders=None, slip=None, radius=None)\n--\n\nmake_tag(**pool_options, **tag_config) -> Env",
     ),
     FunctionRow::kw::<MakeRts>(
         c"make_rts",
-        c"make_rts($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, decision_ticks=None, max_units=None, step_limit=None, seat_swap=None, opponent=None)\n--\n\nmake_rts(**pool_options, **rts_config) -> Env",
+        c"make_rts($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, size=None, decision_ticks=None, max_units=None, step_limit=None, seat_swap=None, opponent=None)\n--\n\nmake_rts(**pool_options, **rts_config) -> Env",
     ),
     FunctionRow::kw::<MakeLob>(
         c"make_lob",
-        c"make_lob($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, steps=None, depth=None, min_tick=None, max_tick=None, initial_price=None, up_permille=None, down_permille=None, latency=None, size_0=None, size_1=None, size_2=None, size_3=None, max_position=None, initial_cash=None, allow_short_cash=None, bankrupt=None, noise=None, reward_shift=None)\n--\n\nmake_lob(**pool_options, **lob_config) -> Env",
+        c"make_lob($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, agents=None, steps=None, depth=None, min_tick=None, max_tick=None, initial_price=None, up_permille=None, down_permille=None, latency=None, size_0=None, size_1=None, size_2=None, size_3=None, max_position=None, initial_cash=None, allow_short_cash=None, bankrupt=None, noise=None, reward_shift=None)\n--\n\nmake_lob(**pool_options, **lob_config) -> Env",
     ),
-    FunctionRow::kw::<MakeConnect4>(c"make_connect4", c"make_connect4($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_connect4(**pool_options) -> Env"),
-    FunctionRow::kw::<MakeLeduc>(c"make_leduc", c"make_leduc($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_leduc(**pool_options) -> Env"),
-    FunctionRow::kw::<MakeLanterns>(c"make_lanterns", c"make_lanterns($module, *, players=None, zero_on_fuse=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_lanterns(*, players=2, zero_on_fuse=False, **pool_options) -> Env"),
-    FunctionRow::kw::<MakeOthello>(c"make_othello", c"make_othello($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_othello(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeConnect4>(c"make_connect4", c"make_connect4($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_connect4(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeLeduc>(c"make_leduc", c"make_leduc($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_leduc(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeLanterns>(c"make_lanterns", c"make_lanterns($module, *, players=None, zero_on_fuse=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_lanterns(*, players=2, zero_on_fuse=False, **pool_options) -> Env"),
+    FunctionRow::kw::<MakeOthello>(c"make_othello", c"make_othello($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None)\n--\n\nmake_othello(**pool_options) -> Env"),
     FunctionRow::kw::<MakeGo9>(
         c"make_go9",
-        c"make_go9($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, komi_half_points=None)\n--\n\nmake_go9(**pool_options, komi_half_points=15) -> Env",
+        c"make_go9($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, komi_half_points=None)\n--\n\nmake_go9(**pool_options, komi_half_points=15) -> Env",
     ),
     FunctionRow::kw::<MakeGrid>(
         c"make_grid",
-        c"make_grid($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None, layout=None)\n--\n\nmake_grid(**pool_options, size=16, max_steps=200, layout=\"open\") -> Env",
+        c"make_grid($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, size=None, max_steps=None, layout=None)\n--\n\nmake_grid(**pool_options, size=16, max_steps=200, layout=\"open\") -> Env",
     ),
     FunctionRow::kw::<MakeGridLanes>(
         c"make_grid_lanes",
-        c"make_grid_lanes($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None, layout=None)\n--\n\nmake_grid_lanes(**pool_options, size=16, max_steps=200, layout=\"open\") -> Env; chunk_size must be a multiple of 8, mode=\"async\" is refused",
+        c"make_grid_lanes($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, size=None, max_steps=None, layout=None)\n--\n\nmake_grid_lanes(**pool_options, size=16, max_steps=200, layout=\"open\") -> Env; chunk_size must be a multiple of 8, mode=\"async\" is refused",
     ),
     FunctionRow::kw::<MakeKeydoor>(
         c"make_keydoor",
-        c"make_keydoor($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, agents=None)\n--\n\nmake_keydoor(**pool_options, size=8, agents=1) -> Env",
+        c"make_keydoor($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, size=None, agents=None)\n--\n\nmake_keydoor(**pool_options, size=8, agents=1) -> Env",
     ),
     FunctionRow::kw::<MakeGather>(
         c"make_gather",
-        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, items=None, max_steps=None, targets=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100, targets=False) -> Env",
+        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, size=None, items=None, max_steps=None, targets=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100, targets=False) -> Env",
     ),
     FunctionRow::kw::<MakeSnake>(
         c"make_snake",
-        c"make_snake($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, agents=None, obs=None)\n--\n\nmake_snake(**pool_options, size=16, agents=1, obs=\"pixels\") -> Env",
+        c"make_snake($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, size=None, agents=None, obs=None)\n--\n\nmake_snake(**pool_options, size=16, agents=1, obs=\"pixels\") -> Env",
     ),
     FunctionRow::kw::<MakeBrickwall>(
         c"make_brickwall",
-        c"make_brickwall($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, frameskip=None, lives=None, obs=None)\n--\n\nmake_brickwall(**pool_options, frameskip=4, lives=5, obs=\"pixels\") -> Env",
+        c"make_brickwall($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, frameskip=None, lives=None, obs=None)\n--\n\nmake_brickwall(**pool_options, frameskip=4, lives=5, obs=\"pixels\") -> Env",
     ),
     FunctionRow::kw::<MakePaddleduel>(
         c"make_paddleduel",
-        c"make_paddleduel($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, frameskip=None, max_score=None, bounce=None, obs=None)\n--\n\nmake_paddleduel(**pool_options, agents=1, frameskip=4, max_score=11, bounce=1, obs=\"pixels\") -> Env",
+        c"make_paddleduel($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, agents=None, frameskip=None, max_score=None, bounce=None, obs=None)\n--\n\nmake_paddleduel(**pool_options, agents=1, frameskip=4, max_score=11, bounce=1, obs=\"pixels\") -> Env",
     ),
-    FunctionRow::kw::<MakeJobshop>(c"make_jobshop", c"make_jobshop($module, *, jobs=None, machines=None, max_duration=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None))\n--\n\nmake_jobshop(*, jobs=6, machines=6, max_duration=99, **pool_options) -> Env"),
-    FunctionRow::kw::<MakeVrp>(c"make_vrp", c"make_vrp($module, *, customers=None, vehicles=None, grid=None, max_demand=None, capacity=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None))\n--\n\nmake_vrp(*, customers=20, vehicles=1, grid=100, max_demand=9, capacity=30, **pool_options) -> Env"),
+    FunctionRow::kw::<MakeJobshop>(c"make_jobshop", c"make_jobshop($module, *, jobs=None, machines=None, max_duration=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None))\n--\n\nmake_jobshop(*, jobs=6, machines=6, max_duration=99, **pool_options) -> Env"),
+    FunctionRow::kw::<MakeVrp>(c"make_vrp", c"make_vrp($module, *, customers=None, vehicles=None, grid=None, max_demand=None, capacity=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None))\n--\n\nmake_vrp(*, customers=20, vehicles=1, grid=100, max_demand=9, capacity=30, **pool_options) -> Env"),
     FunctionRow::kw::<MakeSurvival>(
         c"make_survival",
-        c"make_survival($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, size=None, steps=None, view=None, respawn=None, forest_regrow=None, water_permille=None, forest_permille=None, stone_permille=None)\n--\n\nmake_survival(**pool_options, **survival_config) -> Env",
+        c"make_survival($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agent_lanes=None, agents=None, size=None, steps=None, view=None, respawn=None, forest_regrow=None, water_permille=None, forest_permille=None, stone_permille=None)\n--\n\nmake_survival(**pool_options, **survival_config) -> Env",
     ),
 ];
 

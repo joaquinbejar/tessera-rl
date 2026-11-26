@@ -919,7 +919,7 @@ def _index(value, what: str) -> int:
 
 
 #: Keyword arguments the native constructors take as strings.
-_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "schedule"}
+_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "schedule", "agent_lanes"}
 
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
@@ -1035,7 +1035,7 @@ def is_stale(array) -> bool:
 #: Pool options that change how a pool runs, not what its records are: a
 #: shadow pool (`tessera_rl.viewer.watch`) drops them.
 _EXECUTION_OPTIONS = frozenset(
-    {"mode", "batch_size", "gather", "workers", "spin", "wait", "wait_cap_us", "chunk_size", "schedule"}
+    {"mode", "batch_size", "gather", "workers", "spin", "wait", "wait_cap_us", "chunk_size", "schedule", "agent_lanes"}
 )
 
 
@@ -1070,7 +1070,10 @@ def make(
     spinning through the caller's typical gap between steps, up to
     ``wait_cap_us`` microseconds, an int in ``1..=1000000``, 10000 by
     default; it keeps caches warm at the cost of about one core per worker
-    for that gap; it needs workers, as ``spin`` does), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
+    for that gap; it needs workers, as ``spin`` does), ``agent_lanes``
+    (``"auto"``, the default, runs an environment's agent-lane step when it
+    has one; ``"reference"`` always runs the reference step;
+    outputs are identical either way), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
     two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
     ``"gathered"`` by default or ``"indexed"``); see ``Env``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
