@@ -18,12 +18,18 @@ def load():
     return m
 
 
+def written(fid):
+    """Records the bench declares for an operation: N - 1 for the forks."""
+    return N - 1 if fid.split("/")[-1] in ("fork", "fork_branched") else N
+
+
 def case(root, group, fid, record_bytes, ns_per_instance, throughput=None):
     d = root / group / fid.replace("/", "_") / "new"
     d.mkdir(parents=True)
-    tp = {"Bytes": record_bytes * N} if throughput is None else throughput
+    n = written(fid)
+    tp = {"Bytes": record_bytes * n} if throughput is None else throughput
     (d / "benchmark.json").write_text(json.dumps({"group_id": group, "function_id": fid, "throughput": tp}))
-    total = ns_per_instance * N
+    total = ns_per_instance * n
     est = {"median": {"point_estimate": total, "confidence_interval": {"lower_bound": total * 0.9, "upper_bound": total * 1.1}}}
     (d / "estimates.json").write_text(json.dumps(est))
 
@@ -53,6 +59,44 @@ def test_soa_bound_report_only_ops_never_fail(tmp_path, capsys):
     case(tmp_path, "g", "soa_cartpole/snapshot_one", 96, 5000.0)
     assert load().main([str(tmp_path), "--group", "g", "--instances", str(N)]) == 0
     assert capsys.readouterr().out.count(", report") == 2
+
+
+def test_soa_bound_real_criterion_fork_shape_divides_by_destinations(tmp_path, capsys):
+    # The files Criterion 0.5 writes for benches/soa_snapshot.rs's
+    # aos_grid/fork at N = 8192: 72-byte records, 8191 destinations
+    # (589752 = 72 * 8191; gate-b735-r1 refused this before the fix).
+    d = tmp_path / "soa_snapshot_grid_8192" / "aos_grid_fork" / "new"
+    d.mkdir(parents=True)
+    (d / "benchmark.json").write_text(json.dumps({
+        "group_id": "soa_snapshot_grid_8192",
+        "function_id": "aos_grid/fork",
+        "value_str": None,
+        "throughput": {"Bytes": 589752},
+        "full_id": "soa_snapshot_grid_8192/aos_grid/fork",
+        "directory_name": "soa_snapshot_grid_8192/aos_grid_fork",
+        "title": "soa_snapshot_grid_8192/aos_grid/fork",
+    }))
+    def est(p):
+        return {"confidence_interval": {"confidence_level": 0.95, "lower_bound": p * 0.95, "upper_bound": p * 1.05},
+                "point_estimate": p, "standard_error": p * 0.01}
+    (d / "estimates.json").write_text(json.dumps({
+        "mean": est(163820.0), "median": est(163820.0), "median_abs_dev": est(800.0),
+        "slope": est(163820.0), "std_dev": est(1200.0),
+    }))
+    assert load().main([str(tmp_path), "--group", "soa_snapshot_grid_8192", "--instances", str(N)]) == 0
+    out = capsys.readouterr().out
+    assert "aos_grid/fork: record 72 B, median 20.0 ns [19.0, 21.0], bound 70.3 ns, PASS" in out
+    assert "per destination (8191 records)" in out
+
+
+def test_soa_bound_fork_declared_over_all_instances_is_refused(tmp_path):
+    case(tmp_path, "g", "soa_cartpole/fork", 96, 80.0, throughput={"Bytes": 96 * N})
+    assert load().main([str(tmp_path), "--group", "g", "--instances", str(N)]) == 2
+
+
+def test_soa_bound_fork_at_one_instance_is_refused(tmp_path):
+    case(tmp_path, "g", "soa_cartpole/fork", 96, 80.0, throughput={"Bytes": 96})
+    assert load().main([str(tmp_path), "--group", "g", "--instances", "1"]) == 2
 
 
 def test_soa_bound_bad_input_is_refused(tmp_path, capsys):

@@ -6,8 +6,11 @@
 
 Reads Criterion's results for one benchmark group
 (`<criterion dir>/<group>/<case>/new/{benchmark,estimates}.json`). Each case
-declares its throughput as `size_of::<Record<E>>() * instances` bytes, so the
-record size is recovered exactly as throughput / instances. For every case it
+declares its throughput as `size_of::<Record<E>>()` bytes times the records it
+writes: `instances` for most operations, `instances - 1` for `fork` and
+`fork_branched` (one record per destination; the source is not written). The
+record size is recovered exactly as throughput / that count, and the medians
+are per record written. For every case it
 prints the record bytes, the per-instance median and 95% interval in ns, and
 the bound of 1 us per KB per instance (record bytes / 1024 us). A case passes
 when its median is at or below the bound. Exit status 0 if every bounded case
@@ -23,6 +26,14 @@ import pathlib
 import sys
 
 BOUNDED = ("snapshot_all", "fork", "fork_branched", "restore")
+# Operations that write every instance but the source: their throughput is
+# declared over `instances - 1` records (benches/soa_snapshot.rs).
+TO_DESTINATIONS = ("fork", "fork_branched")
+
+
+def records_written(op: str, instances: int) -> int:
+    """The records an operation writes, the divisor of its declared throughput."""
+    return instances - 1 if op in TO_DESTINATIONS else instances
 
 
 class InputError(Exception):
@@ -40,22 +51,25 @@ def read_case(case_dir: pathlib.Path, instances: int) -> dict:
         est = json.loads((case_dir / "new" / "estimates.json").read_text())
     except (OSError, ValueError) as e:
         raise InputError(f"{case_dir}: {e}") from e
-    tp = bench.get("throughput") or {}
-    total = tp.get("Bytes") if isinstance(tp, dict) else None
-    if not isinstance(total, int) or total <= 0 or total % instances:
-        raise InputError(f"{case_dir}: throughput {tp!r} is not a multiple of {instances} bytes")
     fid = bench.get("function_id") or ""
     if "/" not in fid:
         raise InputError(f"{case_dir}: function_id {fid!r} is not env/op")
     env, op = fid.split("/", 1)
+    n = records_written(op, instances)
+    if n <= 0:
+        raise InputError(f"{case_dir}: {op} writes no record at {instances} instances")
+    tp = bench.get("throughput") or {}
+    total = tp.get("Bytes") if isinstance(tp, dict) else None
+    if not isinstance(total, int) or total <= 0 or total % n:
+        raise InputError(f"{case_dir}: throughput {tp!r} is not a multiple of {n} records ({op})")
     med = est["median"]
     return {
         "env": env,
         "op": op,
-        "record_bytes": total // instances,
-        "median_ns": med["point_estimate"] / instances,
-        "lo_ns": med["confidence_interval"]["lower_bound"] / instances,
-        "hi_ns": med["confidence_interval"]["upper_bound"] / instances,
+        "record_bytes": total // n,
+        "median_ns": med["point_estimate"] / n,
+        "lo_ns": med["confidence_interval"]["lower_bound"] / n,
+        "hi_ns": med["confidence_interval"]["upper_bound"] / n,
     }
 
 
@@ -70,7 +84,10 @@ def report(criterion: pathlib.Path, group: str, instances: int) -> tuple[list[st
     if not rows:
         raise InputError(f"{gdir}: no cases")
     ok = True
-    out = [f"group {group}, {instances} instances; bound = record bytes / 1024 us per instance (ADR-0010)"]
+    out = [
+        f"group {group}, {instances} instances; bound = record bytes / 1024 us per record written (ADR-0010);"
+        f" fork and fork_branched are per destination ({instances - 1} records)"
+    ]
     for r in rows:
         b = bound_ns(r["record_bytes"])
         if r["op"] in BOUNDED:
