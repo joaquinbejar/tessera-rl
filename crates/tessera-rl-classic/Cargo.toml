@@ -50,6 +50,11 @@ harness = false
 name = "classic_instructions"
 harness = false
 
+# The gather cost of a lane-wise pool's snapshots and forks (ADR-0090 7).
+[[bench]]
+name = "soa_snapshot"
+harness = false
+
 # The live watch acceptance benchmark (ADR-0083 item 7, #378 4d).
 [[bench]]
 name = "watch_step"

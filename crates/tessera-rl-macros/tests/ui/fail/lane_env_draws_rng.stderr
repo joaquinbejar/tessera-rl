@@ -1,0 +1,30 @@
+error[E0080]: evaluation panicked: LaneEnvironment kernels draw no RNG values (ADR-0090 4.2)
+ --> $RUST/core/src/panic.rs
+  |
+  = note: evaluation of `tessera_rl_core::lane_env_hooks::<Drawing>::{constant#0}` failed here
+  |
+ ::: $WORKSPACE/crates/tessera-rl-core/src/lane_env.rs
+  |
+  | /         assert!(
+  | |             !E::STEP_DRAWS_RNG && !E::OBSERVE_DRAWS_RNG,
+  | |             "LaneEnvironment kernels draw no RNG values (ADR-0090 4.2)"
+  | |         );
+  | |_________- in this macro invocation
+
+note: erroneous constant encountered
+ --> $WORKSPACE/crates/tessera-rl-core/src/lane_env.rs
+  |
+  | /     const {
+  | |         assert!(
+  | |             <E::State as EnvState>::LANES,
+  | |             "LaneEnvironment needs a #[state(lanes)] state (ADR-0090)"
+... |
+  | |         );
+  | |     }
+  | |_____^
+
+note: erroneous constant encountered
+  --> tests/ui/fail/lane_env_draws_rng.rs:97:13
+   |
+97 |     let _ = <Drawing as Environment>::LANE_ENV;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
