@@ -26,5 +26,9 @@ tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 name = "int_lanes"
 harness = false
 
+[[bench]]
+name = "narrow_lanes"
+harness = false
+
 [lints]
 workspace = true
