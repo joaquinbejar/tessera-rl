@@ -24,8 +24,9 @@ python = ["dep:tessera-rl-pyffi", "dep:pyo3"]
 {{/path_deps}}
 {{^path_deps}}
 # The Tessera crates at exactly the version of the cargo-tessera that
-# scaffolded this crate: the host API is experimental until 1.0 (ADR-0062
-# item 9) and may change in a minor release. Raise all of them together.
+# scaffolded this crate: the host Rust API is excluded from the 1.x
+# stability promise (ADR-0094 item 3) and may change in a minor release.
+# Raise all of them together.
 {{/path_deps}}
 [dependencies]
 tessera-rl-core = {{dep_core}}

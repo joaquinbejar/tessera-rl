@@ -14,7 +14,7 @@ cargo tessera bench --quick
 ```
 
 - `new` writes a crate with its own workspace and wheel: a counter game implementing `HostEnvironment` (and `HostSnapshot` with `--snapshots`), `tests/check.rs`, `tests/test_adapters.py`, `benches/step.rs`, `pyproject.toml` and the Python package. It refuses an existing directory. The `tessera/` id namespace is reserved.
-- The scaffold depends on the Tessera crates at exactly this tool's version (`=X.Y.Z`): the host API is experimental until 1.0 and may change in a minor release. `--tessera-path <checkout>` uses path dependencies instead.
+- The scaffold depends on the Tessera crates at exactly this tool's version (`=X.Y.Z`): the host Rust API is excluded from the 1.x stability promise (ADR-0094 item 3) and may change in a minor release; host protocols 1 and 2 are stable. `--tessera-path <checkout>` uses path dependencies instead.
 - `check` runs `cargo test --test check`: `check_determinism` (Inline and with workers), `check_continuation`, `check_spaces`, `check_invariants`, the snapshot checks with `--snapshots`, and the golden hashes. `--python` installs the wheel with `maturin develop` (or `uv pip install` with `--uv`), both taken from the PATH, and runs pytest. `--locked` and `--offline` reach every cargo call.
 - `bench` runs the criterion bench and prints steps per second at 1, 1024 and 8192 instances, Inline and with 4 workers, and snapshot costs.
 

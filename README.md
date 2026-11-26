@@ -38,7 +38,7 @@ change in any 0.x release.
 | Classic games (phase 3) | Implemented: mountain car, Acrobot, pendulum, grid world, key and door, Snake, paddle duel and brick wall |
 | SIMD lanes (phase 3) | Partial: `tessera-rl-simd` has a standalone lane-wise CartPole kernel; no pool uses it |
 | RTS (phase 4) | Implemented: `tessera-rl-rts`, with fog of war, multi-head actions and scripted opponents |
-| Host environments for external crates | Experimental: `HostEnvironment` (heap state), `HostPool` (Inline and Sync), author-provided snapshots through `HostSnapshot` (ADR-0073, Rust only so far), host protocol 1 through `tessera-rl-pyffi`'s `export_host_env!`, and `tessera_rl.make` for installed host wheels, with the Gymnasium and PettingZoo adapters; an out-of-tree example in `examples/host_orderbook` |
+| Host environments for external crates | Rust API excluded from the 1.x stability promise, host protocols 1 and 2 stable (ADR-0094 item 3): `HostEnvironment` (heap state), `HostPool` (Inline and Sync), author-provided snapshots through `HostSnapshot` (ADR-0073, Rust only so far), host protocols 1 and 2 through `tessera-rl-pyffi`'s `export_host_env!`, and `tessera_rl.make` for installed host wheels, with the Gymnasium and PettingZoo adapters; an out-of-tree example in `examples/host_orderbook` |
 | Markets (phase 4) | Implemented: `tessera-rl-markets`, a limit order book with latency, conditional masks, `Set` observations, `Determinize` and scripted baselines |
 | GPU paths, card games, league tooling, viewer | Planned |
 
@@ -52,8 +52,8 @@ Known limits of 0.3.0:
   attempts are recorded losses, at 0.791, 0.912 and 0.929 of PufferLib's
   score; the gate stays open (#152).
 - Host environments have no snapshot, fork or persistence, and no
-  Pipelined or Async mode; the host surface is experimental and may break
-  in a 0.x minor release (ADR-0062 item 9).
+  Pipelined or Async mode; the host Rust API is excluded from the 1.x
+  stability promise and may change in a minor release (ADR-0094 item 3).
 - **Windows is not in CI**, and no Windows wheel is built. CI covers Linux
   x86-64, Linux aarch64 and macOS (aarch64). The Python Win64
   floating-point boundary has been checked natively by hand (#166, #183,

@@ -27,7 +27,8 @@
 //! `save`, `check_snapshot` and `load` must not read the clock, do I/O,
 //! depend on the thread or call into Python.
 //!
-//! Experimental until 1.0 (ADR-0062 item 9).
+//! Excluded from the 1.x stability promise, like the other host surfaces
+//! (ADR-0094 item 3).
 
 use crate::host::HostEnvironment;
 
