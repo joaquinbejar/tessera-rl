@@ -37,14 +37,18 @@ def inputs(wheel, base="w0", passed=True, **statuses):
 OK = {"W1": inputs("w1"), "W2F": inputs("w2f")}
 
 
+X86 = "Intel(R) Xeon(R) CPU"
+ARM = "arm64 implementer=0x41 variant=0x0 part=0xd0c revision=1"
+
+
 def costs(label, ir, mis=5000):
     events = {"Ir": ir, "Bcm": mis, "Bim": 0, "PrimIr": 0}
-    return {"sha256": {"wheel": label, "manifest": SHA}, "costs": {s.name: events for s in ALL}}
+    return {"sha256": {"wheel": label, "manifest": SHA, "cpu_model": X86}, "costs": {s.name: events for s in ALL}}
 
 
 def feas(**over):
     gating = [s.name for s in ALL if s.single_threaded]
-    base = {"passed": True, "sha256": {"manifest": SHA, "wheel": "w1"}, "gating": gating, "mispredict": gating, "usable": True, "mispredict_available": True}
+    base = {"passed": True, "sha256": {"manifest": SHA, "wheel": "w1", "cpu_model": X86}, "gating": gating, "mispredict": gating, "usable": True, "mispredict_available": True}
     return {**base, **over}
 
 
@@ -290,3 +294,27 @@ def test_pgo_decide_refuses_a_kernel_list_other_than_the_frozen_one(kernels, tmp
 def test_pgo_decide_frozen_kernels_sha_is_the_repository_list():
     path = pathlib.Path(MANIFEST).parent / "kernels.toml"
     assert decide.KERNELS_SHA256 == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_pgo_decide_claim_names_the_x86_64_leg(kernels):
+    assert "under Callgrind on Linux x86-64," in run(reports(), kernels)["claim"]
+
+
+def test_pgo_decide_claim_names_the_aarch64_leg(kernels):
+    r = reports()
+    for v in r.values():
+        v["sha256"]["cpu_model"] = ARM
+    f = feas()
+    f["sha256"]["cpu_model"] = ARM
+    claim = run(r, kernels, f)["claim"]
+    assert "under Callgrind on Linux aarch64," in claim and "x86-64" not in claim
+
+
+def test_pgo_decide_claim_without_cpu_model_is_refused(kernels):
+    r = reports()
+    for v in r.values():
+        del v["sha256"]["cpu_model"]
+    f = feas()
+    del f["sha256"]["cpu_model"]
+    with pytest.raises(decide.Refused, match="cpu_model"):
+        run(r, kernels, f)
