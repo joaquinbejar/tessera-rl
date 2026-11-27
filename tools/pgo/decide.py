@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The shipment decision on x86-64 (docs/reviews/pgo-wheels-design.md r5,
+"""The shipment decision for one Linux leg, x86-64 or aarch64 (docs/reviews/pgo-wheels-design.md r5,
 section 6), from measured costs, the feasibility report and determinism results.
 
     decide.py --manifest M --kernels K --feasibility F --w0 C --w1 C
@@ -136,13 +136,23 @@ def decide(reports: dict, feasibility: dict, seventh: dict, manifest_path: str, 
         if sets.mispredict_available and names:
             out["w2f_mispredict_ratio"] = evidence.geomean([w2f[n].mispredicts / w1[n].mispredicts for n in names])
     out["ship"] = evidence.ship(w1_ok, w2_ok)
-    out["claim"] = wording(out, manifest["version"])
+    out["claim"] = wording(out, manifest["version"], leg(feasibility))
     return out
 
 
-def wording(out: dict, version: int) -> str:
-    """The only allowed claim (section 6): Callgrind on Linux x86-64, the `_native`
-    object only, these scenarios. Never time, SPS or other platforms."""
+def leg(feasibility: dict) -> str:
+    """The measured leg, from the host stamp every report shares with the gate
+    (`_check`): `callgrind.cpu` writes an arm64 model as "arm64 implementer=...",
+    any other model is x86-64. Refused when the stamp has no CPU model."""
+    model = feasibility["sha256"].get("cpu_model")
+    if not model:
+        raise Refused("the stamp has no cpu_model: the measured leg cannot be named")
+    return "Linux aarch64" if model.startswith("arm64 ") else "Linux x86-64"
+
+
+def wording(out: dict, version: int, platform: str) -> str:
+    """The only allowed claim (section 6): Callgrind on the measured leg, the
+    `_native` object only, these scenarios. Never time, SPS or other platforms."""
     if out["ship"] == "W0":
         return "No change: the default release wheel ships."
     extra = ""
@@ -154,7 +164,7 @@ def wording(out: dict, version: int) -> str:
             extra = f" and {100 * (1 - out['w2f_mispredict_ratio']):.1f}% fewer simulated branch mispredictions"
     return (
         f"{pct:.1f}% fewer instructions{extra} than {against} inside the _native object, "
-        f"under Callgrind on Linux x86-64, in the gating scenarios of manifest v{version}. "
+        f"under Callgrind on {platform}, in the gating scenarios of manifest v{version}. "
         "Not a time or SPS claim, and it excludes allocator and runtime work."
     )
 
