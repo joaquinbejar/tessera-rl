@@ -35,5 +35,9 @@ Before you start:
   `README.tpl` with `cargo-readme` (`make readme`); edit those, not
   `README.md`.
 
+## Dependencies
+
+Pull requests must not add dependencies (crates, packages, libraries, actions) that are owned, maintained or published by the pull request's author. If you need functionality from a library you maintain, implement the needed logic directly in this repository instead. PRs that add such a dependency will be asked to remove it before review continues. Any new third party dependency must be justified in the PR description (why it is needed, license, maintenance status).
+
 Contributions are dual licensed under MIT OR Apache-2.0, as described in the
 README.
