@@ -48,7 +48,7 @@ pub mod step_out;
 
 pub use adapters::Adapters;
 pub use agent::{AgentSlot, Tier, TurnStructure};
-pub use agent_lane::{AgentLaneEnvironment, AgentLaneHook, agent_lane_hook};
+pub use agent_lane::AgentLaneHook;
 pub use asset::{Asset, AssetData, AssetEntry, AssetError, AssetHash};
 pub use bool8::Bool8;
 pub use config_canonical::{CanonicalDecode, CanonicalDecodeError, decode_canonical};
