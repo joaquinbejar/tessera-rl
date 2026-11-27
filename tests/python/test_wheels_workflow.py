@@ -36,12 +36,12 @@ def test_wheels_aarch64_linux_mirrors_the_x86_64_job_script_and_reports():
     run = re.search(r"run: (scripts/wheel_job.sh .*)", job).group(1).split()
     assert run[1:3] == ["aarch64-unknown-linux-gnu", "manylinux_2_28"]
     assert all(re.fullmatch(r"[0-9a-f]{64}", sha) for sha in run[3:5]) and len(run) == 6
-    assert run[5] == "release"
+    assert run[5] == "wheel"
     assert re.search(r"options: (.*)", job).group(1).split() == ["--init"]
     assert "name: wheel-aarch64-unknown-linux-gnu" in job
     assert re.search(r"venv/bin/python\" -I -c 'import tessera_rl", job)
     assert re.search(r"^    permissions:\n      contents: read\n(?!      )", job, re.M)
-    for report in ("dist/*.whl", "golden-report.json", "checks.json", "determinism.json"):
+    for report in ("dist/*.whl", "golden-report.json", "checks.json", "determinism.json", "determinism-w0.json", "compare.json"):
         assert report in job
 
 
@@ -118,7 +118,7 @@ def test_wheels_linux_x86_64_builds_with_the_wheel_profile():
 
 
 def test_wheels_other_targets_keep_the_default_release_profile():
-    for job in ("linux-aarch64", "macos"):
+    for job in ("macos", "musl-x86_64", "windows"):
         run = re.search(r"run: (scripts/wheel_job.sh .*)", _job(job)).group(1).split()
         assert run[-1] == "release", job
     assert WORKFLOW.count("profile: wheel") == 1
@@ -270,3 +270,18 @@ def test_wheels_every_leg_gets_the_sbom_inputs_from_preflight():
         assert "      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}\n" in env, name
         needs = re.search(r"^    needs: (.*)$", job, re.M).group(1)
         assert needs in ("preflight", "[preflight, linux]"), (name, needs)
+
+
+def test_wheels_w1_legs_are_x86_64_linux_and_both_aarch64_linux():
+    # #770: the aarch64 glibc and musl legs ship W1; macOS stays W0 until its leg runs.
+    w1 = {"linux"}
+    for job in ("linux-aarch64", "musl-aarch64"):
+        run = re.search(r"run: (scripts/wheel_job.sh .*)", _job(job)).group(1).split()
+        assert run[-1] == "wheel", job
+        assert re.search(r"^    name: W1 \(aarch64-unknown-linux-(gnu|musl)\)$", _job(job), re.M), job
+        assert "determinism-w0.json" in _job(job) and "compare.json" in _job(job), job
+        assert re.search(r"^    timeout-minutes: 150$", _job(job), re.M), job
+        w1.add(job)
+    for job in WHEEL_JOBS:
+        if job not in w1:
+            assert re.search(r"^    name: W0 \(", _job(job), re.M), job
