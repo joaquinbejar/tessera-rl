@@ -1743,8 +1743,6 @@ fn tessera_rl::classic::tag::grid::delta: const fn delta(action: i32) -> [i32; 2
 fn tessera_rl::classic::tag::grid::distance: fn distance(a: tessera_rl_classic::tag::grid::Cell, b: tessera_rl_classic::tag::grid::Cell) -> u32
 fn tessera_rl::classic::tag::grid::moved: fn moved(cell: tessera_rl_classic::tag::grid::Cell, action: i32, width: u32, height: u32) -> core::option::Option<tessera_rl_classic::tag::grid::Cell>
 fn tessera_rl::classic::tag::grid::place: fn place(cells: &mut [tessera_rl_classic::tag::grid::Cell], width: u32, height: u32, rng: &mut tessera_rl_num::rng::StepRng)
-fn tessera_rl::core::agent_lane::agent_lane_hook: const fn agent_lane_hook<E: tessera_rl_core::agent_lane::AgentLaneEnvironment>() -> tessera_rl_core::agent_lane::AgentLaneHook<E>
-fn tessera_rl::core::agent_lane_hook: const fn agent_lane_hook<E: tessera_rl_core::agent_lane::AgentLaneEnvironment>() -> tessera_rl_core::agent_lane::AgentLaneHook<E>
 fn tessera_rl::core::asset::bundled_or_default: fn bundled_or_default<T: tessera_rl_core::asset::AssetData + core::default::Default>(name: &str) -> tessera_rl_core::asset::Asset<T>
 fn tessera_rl::core::asset::check_asset_fixpoint: fn check_asset_fixpoint<T: tessera_rl_core::asset::AssetData>(sample: &[u8]) -> core::result::Result<(), alloc::string::String>
 fn tessera_rl::core::config::asset_list: fn asset_list<C: tessera_rl_core::env::EnvConfig>(cfg: &C) -> alloc::vec::Vec<tessera_rl_core::asset::AssetEntry>
@@ -8120,7 +8118,6 @@ impl tessera_rl::world::Survival: impl core::marker::Sync for tessera_rl_world::
 impl tessera_rl::world::Survival: impl core::marker::Unpin for tessera_rl_world::survival::Survival
 impl tessera_rl::world::Survival: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_world::survival::Survival
 impl tessera_rl::world::Survival: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_world::survival::Survival
-impl tessera_rl::world::Survival: impl tessera_rl_core::agent_lane::AgentLaneEnvironment for tessera_rl_world::survival::Survival
 impl tessera_rl::world::Survival: impl tessera_rl_core::env::ActionMask for tessera_rl_world::survival::Survival
 impl tessera_rl::world::Survival: impl tessera_rl_core::env::Environment for tessera_rl_world::survival::Survival
 impl tessera_rl::world::Survival: impl tessera_rl_core::env::Heuristic for tessera_rl_world::survival::Survival
@@ -8178,7 +8175,6 @@ impl tessera_rl::world::survival::Survival: impl core::marker::Sync for tessera_
 impl tessera_rl::world::survival::Survival: impl core::marker::Unpin for tessera_rl_world::survival::Survival
 impl tessera_rl::world::survival::Survival: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_world::survival::Survival
 impl tessera_rl::world::survival::Survival: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_world::survival::Survival
-impl tessera_rl::world::survival::Survival: impl tessera_rl_core::agent_lane::AgentLaneEnvironment for tessera_rl_world::survival::Survival
 impl tessera_rl::world::survival::Survival: impl tessera_rl_core::env::ActionMask for tessera_rl_world::survival::Survival
 impl tessera_rl::world::survival::Survival: impl tessera_rl_core::env::Environment for tessera_rl_world::survival::Survival
 impl tessera_rl::world::survival::Survival: impl tessera_rl_core::env::Heuristic for tessera_rl_world::survival::Survival
@@ -8321,7 +8317,6 @@ method tessera_rl::core::Adapters::is_empty: const fn is_empty(self) -> bool
 method tessera_rl::core::Adapters::union: const fn union(self, other: Self) -> Self
 method tessera_rl::core::Adapters::valid_for: const fn valid_for(self, turns: tessera_rl_core::agent::TurnStructure) -> bool
 method tessera_rl::core::AdaptiveValues::from_config: fn from_config(cfg: &C) -> Self (required)
-method tessera_rl::core::AgentLaneEnvironment::step_agent_lanes: fn step_agent_lanes(cfg: &<Self as tessera_rl_core::env::Environment>::Config, adaptive: &tessera_rl_core::env::Adaptive<Self>, state: &mut <Self as tessera_rl_core::env::Environment>::State, actions: &tessera_rl_core::io::Actions<'_, <Self as tessera_rl_core::env::Environment>::Action>, rng: &mut tessera_rl_num::rng::StepRng, out: &mut tessera_rl_core::step_out::StepOut<'_>, level: tessera_rl_simd::dispatch::Resolved) (required)
 method tessera_rl::core::AgentSlot::index: const fn index(self) -> usize
 method tessera_rl::core::AgentSlot::new: const fn new(index: u16, max_agents: usize) -> core::option::Option<Self>
 method tessera_rl::core::Asset::bundled: fn bundled(name: &str) -> core::result::Result<Self, tessera_rl_core::asset::AssetError>
@@ -8467,7 +8462,6 @@ method tessera_rl::core::adapters::Adapters::union: const fn union(self, other: 
 method tessera_rl::core::adapters::Adapters::valid_for: const fn valid_for(self, turns: tessera_rl_core::agent::TurnStructure) -> bool
 method tessera_rl::core::agent::AgentSlot::index: const fn index(self) -> usize
 method tessera_rl::core::agent::AgentSlot::new: const fn new(index: u16, max_agents: usize) -> core::option::Option<Self>
-method tessera_rl::core::agent_lane::AgentLaneEnvironment::step_agent_lanes: fn step_agent_lanes(cfg: &<Self as tessera_rl_core::env::Environment>::Config, adaptive: &tessera_rl_core::env::Adaptive<Self>, state: &mut <Self as tessera_rl_core::env::Environment>::State, actions: &tessera_rl_core::io::Actions<'_, <Self as tessera_rl_core::env::Environment>::Action>, rng: &mut tessera_rl_num::rng::StepRng, out: &mut tessera_rl_core::step_out::StepOut<'_>, level: tessera_rl_simd::dispatch::Resolved) (required)
 method tessera_rl::core::asset::Asset::bundled: fn bundled(name: &str) -> core::result::Result<Self, tessera_rl_core::asset::AssetError>
 method tessera_rl::core::asset::Asset::from_bytes: fn from_bytes(bytes: &[u8]) -> core::result::Result<Self, tessera_rl_core::asset::AssetError>
 method tessera_rl::core::asset::Asset::get: fn get(&self) -> &T
@@ -10359,7 +10353,6 @@ struct tessera_rl::world::survival::SurvivalState
 struct tessera_rl::world::survival::map::Shares
 trait tessera_rl::core::ActionMask: trait ActionMask: tessera_rl_core::env::Environment (not dyn)
 trait tessera_rl::core::AdaptiveValues: trait AdaptiveValues<C>: tessera_rl_core::encoding::Canonical + tessera_rl_core::state_init::StateInit + core::marker::Copy + 'static (not dyn)
-trait tessera_rl::core::AgentLaneEnvironment: trait AgentLaneEnvironment: tessera_rl_core::env::Environment (not dyn)
 trait tessera_rl::core::AssetData: trait AssetData: core::marker::Send + core::marker::Sync + core::marker::Sized + 'static (not dyn)
 trait tessera_rl::core::Canonical: trait Canonical: core::marker::Sized (not dyn)
 trait tessera_rl::core::CanonicalDecode: trait CanonicalDecode: tessera_rl_core::config::CanonicalConfig + core::marker::Sized (not dyn)
@@ -10386,7 +10379,6 @@ trait tessera_rl::core::Render: trait Render: tessera_rl_core::env::Environment 
 trait tessera_rl::core::StateEnum: trait StateEnum: core::marker::Copy + core::default::Default + 'static (not dyn)
 trait tessera_rl::core::StateInit: trait StateInit: core::marker::Sized (not dyn)
 trait tessera_rl::core::Validate: trait Validate: tessera_rl_core::env::Environment (not dyn)
-trait tessera_rl::core::agent_lane::AgentLaneEnvironment: trait AgentLaneEnvironment: tessera_rl_core::env::Environment (not dyn)
 trait tessera_rl::core::asset::AssetData: trait AssetData: core::marker::Send + core::marker::Sync + core::marker::Sized + 'static (not dyn)
 trait tessera_rl::core::config::CanonicalConfig: trait CanonicalConfig (not dyn)
 trait tessera_rl::core::config::ConfigValue: trait ConfigValue (not dyn)

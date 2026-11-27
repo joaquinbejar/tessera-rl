@@ -17,7 +17,6 @@ categories.workspace = true
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
-tessera-rl-simd.workspace = true
 tessera-rl-macros.workspace = true
 
 [dev-dependencies]

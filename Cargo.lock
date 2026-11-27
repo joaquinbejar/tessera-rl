@@ -1326,7 +1326,6 @@ dependencies = [
  "tessera-rl-engine",
  "tessera-rl-macros",
  "tessera-rl-num",
- "tessera-rl-simd",
 ]
 
 [[package]]

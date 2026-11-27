@@ -49,8 +49,6 @@
 //! 1 had the `own` leaf only and was never released.
 
 pub mod baseline;
-#[doc(hidden)]
-pub mod lanes;
 pub mod map;
 
 use core::num::NonZeroU32;
