@@ -211,6 +211,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- The PGO decision's claim (`tools/pgo/decide.py`) names the measured platform, Linux x86-64 or Linux aarch64, from the host stamp's CPU model, instead of always "Linux x86-64"; a stamp without a CPU model is refused (#770, #784).
 - `make_grid` and `make_grid_lanes` list their `layout` option in the text signature and the stubs (#726 follow-up); the option itself is unchanged.
 - `tools/bench/bench.py` records the measured commit from a root `.head` file (the full 40-hex SHA) when the source is a `git archive` without a checkout of its own (one unpacked inside an unrelated work tree never takes that tree's commit), and refuses to run when neither exists, when `.head` is malformed or disagrees with the checkout, or when `git status` fails, before measuring anything; the report's `software.git_source` says `"checkout"` or `".head"`; reports no longer carry `"git": "unknown"`, which the dashboard judges invalid (#640).
 - Derive macros point their errors at the offending field (#365, #395), and `EnvState` reports a non-plain-data field type at that field only (#388, #461).
