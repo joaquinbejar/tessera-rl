@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# The authoring study kit's self-check (SPEC 10.3, #386): `make
+# study-acceptance` on PRs that touch the kit or the crates it builds against,
+# and nightly, so the kit cannot rot before the study runs (it did once: the
+# study crates' own Cargo.lock files went stale after #724).
+
+name: Study kit
+
+on:
+  pull_request:
+    paths:
+      - "study/**"
+      - "crates/cargo-tessera/**"
+      - "crates/tessera-rl-core/**"
+      - "crates/tessera-rl-macros/**"
+      - "crates/tessera-rl-num/**"
+      - "crates/tessera-rl-simd/**"
+      - "crates/tessera-rl-engine/**"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/study.yml"
+  schedule:
+    - cron: "40 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  study-acceptance:
+    runs-on: [self-hosted, linux-x64]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cargo fetch --locked
+      - run: for m in study/tasks/*/Cargo.toml study/grading/reference/*/Cargo.toml; do cargo fetch --locked --manifest-path "$m" || exit 1; done
+      - run: make study-acceptance
