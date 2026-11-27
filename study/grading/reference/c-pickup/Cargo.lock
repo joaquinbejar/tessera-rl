@@ -455,6 +455,7 @@ version = "0.3.0"
 dependencies = [
  "inventory",
  "tessera-rl-num",
+ "tessera-rl-simd",
  "thiserror",
  "tracing",
  "xxhash-rust",
@@ -468,6 +469,7 @@ dependencies = [
  "libc",
  "tessera-rl-core",
  "tessera-rl-num",
+ "tessera-rl-simd",
  "thiserror",
  "tracing",
  "windows-sys",
@@ -486,6 +488,14 @@ dependencies = [
 [[package]]
 name = "tessera-rl-num"
 version = "0.3.0"
+
+[[package]]
+name = "tessera-rl-simd"
+version = "0.3.0"
+dependencies = [
+ "tessera-rl-num",
+ "thiserror",
+]
 
 [[package]]
 name = "thiserror"
