@@ -77,6 +77,10 @@ tool_dir="${CARGO_TARGET_DIR:-$root/target}/debug"
 export PATH="$tool_dir:$PATH"
 echo "grade: $(cargo tessera --version) at $(git -C "$root" rev-parse HEAD)"
 echo "grade: sheet $sheet"
+# The copy builds in its own target directory: a caller's CARGO_TARGET_DIR,
+# shared across runs, would reuse test binaries compiled for an earlier
+# (deleted) copy, whose CARGO_MANIFEST_DIR no longer exists.
+export CARGO_TARGET_DIR="$work/target"
 
 if [ ! -e "$crate/Cargo.lock" ]; then
     cp "$root/Cargo.lock" "$crate/Cargo.lock"
