@@ -31,3 +31,37 @@ pub type AgentLaneHook<E> = fn(
     &mut StepOut<'_>,
     Resolved,
 );
+
+/// A many-agent environment whose step runs its order-free per-agent phases
+/// as lane kernels over groups of 8 agents of one instance (ADR-0100
+/// decision 1). The phases and kernels are the environment's own; the
+/// engine only calls the whole agent-lane step through
+/// [`Environment::AGENT_LANE`], set to `Some(agent_lane_hook::<Self>())`.
+pub trait AgentLaneEnvironment: Environment {
+    /// Steps `state` as [`Environment::step_with`] does, bit for bit, with
+    /// the order-free per-agent phases at `level` (ADR-0100 decision 5).
+    fn step_agent_lanes(
+        cfg: &Self::Config,
+        adaptive: &Adaptive<Self>,
+        state: &mut Self::State,
+        actions: &Actions<'_, Self::Action>,
+        rng: &mut StepRng,
+        out: &mut StepOut<'_>,
+        level: Resolved,
+    );
+}
+
+/// The value of [`Environment::AGENT_LANE`] for an
+/// [`AgentLaneEnvironment`]. Fails to compile when the environment reads
+/// its adaptive values, since a pool never takes the hook for it (ADR-0100
+/// decision 1.5).
+#[must_use]
+pub const fn agent_lane_hook<E: AgentLaneEnvironment>() -> AgentLaneHook<E> {
+    const {
+        assert!(
+            !E::READS_ADAPTIVE,
+            "AgentLaneEnvironment with READS_ADAPTIVE = true is not supported (ADR-0100)"
+        );
+    }
+    E::step_agent_lanes
+}
