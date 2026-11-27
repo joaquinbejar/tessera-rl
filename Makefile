@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc doc-private readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly facade-api facade-api-bless py-api py-api-bless py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: study-acceptance onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc doc-private readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly facade-api facade-api-bless py-api py-api-bless py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -363,6 +363,12 @@ dashboard-check:
 # the dashboard into target/site. It publishes nothing (RELEASE-CHECKLIST.md).
 site:
 	uv run --locked --python 3.11 --group site python tools/site/build.py
+
+# The authoring study kit's self-check (SPEC 10.3, #386): Linux, offline,
+# about 5 minutes. CARGO_TARGET_DIR is unset because grade.sh grades fresh
+# temporary copies and a shared target reuses stale test binaries. Not in pre-push.
+study-acceptance:
+	env -u CARGO_TARGET_DIR study/grading/acceptance.sh
 
 # Builds the site into a temporary directory and checks it, plus the Rust
 # API docs as a -D warnings build (the site links docs.rs). Not in pre-push.
