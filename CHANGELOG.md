@@ -179,6 +179,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- The `wheels` workflow's preflight no longer refuses while other runs of the repository are active or queued (#787, the owner's decision): it lists them in the log and never fails, and the jobs queue on their runners.
 - The aarch64 Linux wheels (manylinux_2_28 and musllinux_1_2) are built with the `wheel` profile, W1 (fat LTO, one codegen unit), as the x86-64 Linux wheel is (#770); each job also builds W0 and compares the two, so its timeout is 150 minutes. macOS stays on the release profile.
 - AVX-512 is documented as not a SIMD level until a native AVX-512 runner exists in CI (ADR-0101, #360); `TESSERA_RL_SIMD=avx512` stays refused, so behaviour is unchanged. Docs only.
 - The release checklist checks ADR-0094 items 4 and 6 (#386): the MSRV window and Python floor, and that every supported host protocol is still accepted. The stability page lists `register_host!` with the host Rust API. Docs only.

@@ -55,20 +55,23 @@ jobs:
           echo "commit $GITHUB_SHA epoch $epoch"
           echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
-      - name: Refuse while other runs of this repository are active
+      - name: List other runs of this repository that are active
         env:
           TOKEN: ${{ github.token }}
           WINDOW: ${{ inputs.approved_window }}
         run: |
           echo "approved window: $WINDOW"
+          # The owner, 2026-11-28 (#787): wheels runs even when the repository is
+          # not free, so this step only lists the other active runs, for the log
+          # and the record, and never fails; the jobs queue on their runners.
           # Run 42064531284 (CI, feat/pipelined, PR #82, merged) has been reported
-          # queued since 2026-11-05, and GitHub refuses to cancel or delete it. The
-          # owner approved this one exception on 2026-11-09, by id and only while
-          # that run is reported queued. Nothing else is ignored.
+          # queued since 2026-11-05 and GitHub refuses to cancel or delete it, so
+          # it is listed as queued too.
           for status in in_progress queued; do
             curl -fsSL -H "Authorization: Bearer $TOKEN" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?status=$status&per_page=100" \
-              | python3 -c 'import json,os,sys; me=int(os.environ["GITHUB_RUN_ID"]); o=[r["name"] for r in json.load(sys.stdin)["workflow_runs"] if r["id"]!=me and not (r["id"]==42064531284 and r["status"]=="queued")]; print(o); sys.exit(1 if o else 0)'
+              | python3 -c 'import json,os,sys; me=int(os.environ["GITHUB_RUN_ID"]); print(sys.argv[1], [(r["id"], r["name"]) for r in json.load(sys.stdin)["workflow_runs"] if r["id"]!=me])' "$status" \
+              || echo "$status: could not list (not a refusal)"
           done
 
   linux:
