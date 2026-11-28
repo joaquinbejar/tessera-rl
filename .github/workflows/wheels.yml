@@ -2,9 +2,10 @@
 #
 # Builds the wheels, anchors each installed wheel to the whole committed golden
 # fixtures and runs the Python suite against it (docs/reviews/pgo-wheels-design.md,
-# section 7). Linux x86-64 builds with the `wheel` profile (fat LTO, one codegen
-# unit: W1, the owner's "Publicar W1"); the other targets with the default release
-# profile. No PGO, no publishing.
+# section 7). Linux x86-64 and aarch64 (glibc and musl) build with the `wheel`
+# profile (fat LTO, one codegen unit: W1; x86-64 by the owner's "Publicar W1",
+# aarch64 by #770); the other targets with the default release profile. No PGO,
+# no publishing.
 #
 # aarch64 Linux runs on a GitHub-hosted arm64 runner (issue #149, owner decision
 # of 2026-11-11): the self-hosted m4-linux-arm64 runner is itself a container
@@ -145,9 +146,10 @@ jobs:
     # other event and off forks even if the triggers ever grow.
     needs: preflight
     if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
-    name: W0 (aarch64-unknown-linux-gnu)
+    name: W1 (aarch64-unknown-linux-gnu)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
+    # W1 builds W0 too, for the comparison (wheel_job.sh): two wheels.
+    timeout-minutes: 150
     permissions:
       contents: read
     container:
@@ -170,7 +172,7 @@ jobs:
       TESSERA_WHEEL_ORDERBOOK: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: scripts/wheel_job.sh aarch64-unknown-linux-gnu manylinux_2_28 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d release
+      - run: scripts/wheel_job.sh aarch64-unknown-linux-gnu manylinux_2_28 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d wheel
       # The suite above already imports the wheel in this image; this states it
       # on its own line, with the glibc symbol versions the wheel needs.
       - name: Smoke import in the manylinux_2_28 image
@@ -187,6 +189,8 @@ jobs:
             golden-report.json
             checks.json
             determinism.json
+            determinism-w0.json
+            compare.json
 
   macos:
     needs: [preflight, linux]
@@ -262,9 +266,10 @@ jobs:
     # GitHub-hosted, guarded as linux-aarch64 is.
     needs: preflight
     if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
-    name: W0 (aarch64-unknown-linux-musl)
+    name: W1 (aarch64-unknown-linux-musl)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
+    # W1 builds W0 too, for the comparison (wheel_job.sh): two wheels.
+    timeout-minutes: 150
     permissions:
       contents: read
     container:
@@ -282,7 +287,7 @@ jobs:
       # exceptions, as on the manylinux aarch64 leg.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 956deacdc27ab82ae7ac821d5d3e9e95e4795d476d17efe99743bb8531ca1031 819692e404d23e5aae6bc44c0e260f1f5492fd1910ab4693b2c650f926dbe800 release
+      - run: scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 956deacdc27ab82ae7ac821d5d3e9e95e4795d476d17efe99743bb8531ca1031 819692e404d23e5aae6bc44c0e260f1f5492fd1910ab4693b2c650f926dbe800 wheel
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -293,6 +298,8 @@ jobs:
             golden-report.json
             checks.json
             determinism.json
+            determinism-w0.json
+            compare.json
 
   # Windows x86-64 wheels (#350, option A, decided for the owner on
   # 2026-11-25): GitHub-hosted, guarded as linux-aarch64 is, so no owner

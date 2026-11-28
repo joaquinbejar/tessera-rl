@@ -179,6 +179,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- The aarch64 Linux wheels (manylinux_2_28 and musllinux_1_2) are built with the `wheel` profile, W1 (fat LTO, one codegen unit), as the x86-64 Linux wheel is (#770); each job also builds W0 and compares the two, so its timeout is 150 minutes. macOS stays on the release profile.
 - AVX-512 is documented as not a SIMD level until a native AVX-512 runner exists in CI (ADR-0101, #360); `TESSERA_RL_SIMD=avx512` stays refused, so behaviour is unchanged. Docs only.
 - The release checklist checks ADR-0094 items 4 and 6 (#386): the MSRV window and Python floor, and that every supported host protocol is still accepted. The stability page lists `register_host!` with the host Rust API. Docs only.
 - The golden bless policy follows ADR-0094 item 2 (#386): from 1.0 (the crate major reaching 1, `1.0.0-rc` included) a changed fixture with an `env_version` bump under the same id is refused, since the change belongs under a new id. A generator re-bless (`TESSERA_BLESS_REASON=generator`) now needs a passed control run (`TESSERA_GOLDEN_CONTROL=<dir>`), which replays the actions recorded before the change and must reproduce the committed fixture. No golden file changes.
