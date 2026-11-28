@@ -23,8 +23,10 @@ RUSTUP_VERSION=1.29.3
 exe=""
 case "$target" in *-windows-*) exe=.exe ;; esac
 
+# From stdin (#795): GNU sha256sum prefixes its line with "\" when the path
+# has a backslash (D:\a\... on the Windows leg), which broke the comparison.
 sha256() {
-    if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+    if command -v sha256sum >/dev/null; then sha256sum < "$1"; else shasum -a 256 < "$1"; fi | cut -d' ' -f1
 }
 
 init="$dir/rustup-init$exe"

@@ -106,8 +106,10 @@ export MACOSX_DEPLOYMENT_TARGET=13.0
 mkdir -p "$WHEEL_RUN/bin" "$CARGO_HOME/bin"
 export PATH="$WHEEL_RUN/bin:$CARGO_HOME/bin:$PATH"
 
+# From stdin (#795): GNU sha256sum prefixes its line with "\" when the path
+# has a backslash (D:\a\... on the Windows leg), which broke the comparison.
 sha256() {
-    if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+    if command -v sha256sum >/dev/null; then sha256sum < "$1"; else shasum -a 256 < "$1"; fi | cut -d' ' -f1
 }
 
 fetch() { # url, destination, expected sha256
