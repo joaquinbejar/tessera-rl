@@ -19,7 +19,9 @@ MAX_TRACKED_PATH = 200
 @pytest.mark.skipif(shutil.which("git") is None or not (ROOT / ".git").exists(), reason="needs a git checkout")
 def test_repo_paths_every_tracked_path_is_short_enough_for_windows() -> None:
     out = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True, check=True
+        # safe.directory: the wheel containers run as root over a checkout owned
+        # by another user, where git refuses the repository (#794).
+        ["git", "-c", "safe.directory=*", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True, check=True
     ).stdout
     paths = [p for p in out.split("\0") if p]
     assert paths
