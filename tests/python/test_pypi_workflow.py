@@ -200,7 +200,11 @@ def test_pypi_publish_downloads_the_flat_directory_verify_wrote():
 # and compare.json verbatim, the wheels stubbed to their real METADATA and WHEEL
 # files, and the other reports stubbed to `{}`. The stub wheels' sha256 is not
 # the real one, so checks.json and the W1 name disagree with them on purpose.
+# The W1 artifact is stored as RUN_W1_STORED, because its real name made a
+# tracked path longer than Windows checks out (#789); _run_tree and
+# _fixture_name restore the real name.
 RUN_TREE = Path(__file__).resolve().parent / "fixtures" / "pypi" / "run-43592025059"
+RUN_W1_STORED = "w1-x86_64-unknown-linux-gnu"
 
 
 def _long_paths_enabled():
@@ -235,9 +239,15 @@ RUN_MUSL = {
 RUN_ALL = {**RUN_WHEELS, **RUN_MUSL}
 
 
+def _fixture_name(stored: str) -> str:
+    """The real artifact name of a directory of RUN_TREE (#789)."""
+    return RUN_W1 if stored == RUN_W1_STORED else stored
+
+
 def _run_tree(tmp_path) -> Path:
     arts = tmp_path / "artifacts"
     shutil.copytree(RUN_TREE, arts)
+    (arts / RUN_W1_STORED).rename(arts / RUN_W1)
     # The recorded run predates the `sbom` check (#350 PR 3): add it, passed,
     # as a current run writes it.
     for checks in arts.glob("*/checks.json"):
@@ -257,12 +267,12 @@ def _sha(path: Path) -> str:
 
 
 def test_pypi_run_tree_fixture_is_the_real_layout():
-    assert sorted(p.name for p in RUN_TREE.iterdir()) == sorted(RUN_WHEELS)
+    assert sorted(_fixture_name(p.name) for p in RUN_TREE.iterdir()) == sorted(RUN_WHEELS)
     for name, wheel in RUN_WHEELS.items():
-        d = RUN_TREE / name
+        d = RUN_TREE / (RUN_W1_STORED if name == RUN_W1 else name)
         assert [p.relative_to(d).as_posix() for p in d.rglob("*.whl")] == [f"dist/{wheel}"]
         assert (d / "checks.json").is_file() and (d / "golden-report.json").is_file()
-    assert (RUN_TREE / RUN_W1 / "compare.json").is_file()
+    assert (RUN_TREE / RUN_W1_STORED / "compare.json").is_file()
 
 
 @long_paths
