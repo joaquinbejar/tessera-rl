@@ -278,7 +278,9 @@ jobs:
     # No job container (#790): GitHub's runner refuses JavaScript actions
     # (checkout, upload-artifact) in an Alpine container on arm64. They run on
     # the host, and only wheel_job.sh runs in the pinned image, by docker run,
-    # with --init as the other legs' containers.
+    # with --init as the other legs' containers. It runs as the runner user
+    # (HOME inside the workspace), so upload-artifact can read dist/ and the
+    # reports, and git accepts the runner-owned checkout.
     defaults:
       run:
         shell: bash
@@ -291,7 +293,7 @@ jobs:
       # exceptions, as on the manylinux aarch64 leg.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm --init -e WHEEL_RUN=/work/.wheel-run -e WHEEL_COMMIT -e SOURCE_DATE_EPOCH -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" bash scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 956deacdc27ab82ae7ac821d5d3e9e95e4795d476d17efe99743bb8531ca1031 819692e404d23e5aae6bc44c0e260f1f5492fd1910ab4693b2c650f926dbe800 wheel
+      - run: mkdir -p "$GITHUB_WORKSPACE/.home" && docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/work/.home -e WHEEL_RUN=/work/.wheel-run -e WHEEL_COMMIT -e SOURCE_DATE_EPOCH -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" bash scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 956deacdc27ab82ae7ac821d5d3e9e95e4795d476d17efe99743bb8531ca1031 819692e404d23e5aae6bc44c0e260f1f5492fd1910ab4693b2c650f926dbe800 wheel
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

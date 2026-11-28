@@ -294,7 +294,9 @@ def test_wheels_musl_aarch64_runs_wheel_job_in_the_pinned_image_without_a_job_co
     assert "    container:" not in job
     image = re.search(r"^      IMAGE: (\S+)$", job, re.M).group(1)
     assert re.fullmatch(r"quay.io/pypa/musllinux_1_2_aarch64@sha256:[0-9a-f]{64}", image)
-    run = re.search(r"^      - run: (docker run .*)$", job, re.M).group(1)
-    assert run.startswith('docker run --rm --init -e WHEEL_RUN=/work/.wheel-run -e WHEEL_COMMIT -e SOURCE_DATE_EPOCH ')
+    run = re.search(r"^      - run: (mkdir .*)$", job, re.M).group(1)
+    # As the runner user (#792 follow-up): a root-owned dist/ broke upload-artifact (run 46133250368).
+    assert run.startswith('mkdir -p "$GITHUB_WORKSPACE/.home" && docker run --rm --init --user "$(id -u):$(id -g)" '
+                          '-e HOME=/work/.home -e WHEEL_RUN=/work/.wheel-run -e WHEEL_COMMIT -e SOURCE_DATE_EPOCH ')
     assert '-v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" bash scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 ' in run
-    assert job.index("actions/checkout@") < job.index("- run: docker run") < job.index("actions/upload-artifact@")
+    assert job.index("actions/checkout@") < job.index("- run: mkdir") < job.index("actions/upload-artifact@")
