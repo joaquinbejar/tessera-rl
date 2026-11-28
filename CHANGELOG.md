@@ -214,8 +214,8 @@ the API is not stable, and any 0.x release may break it.
 ### Fixed
 
 - The tracked-path length test runs `git` with `safe.directory=*`, so it passes in the wheel containers, which run as root over a checkout owned by another user (#794).
-- `install_rustup.sh` and `wheel_job.sh` hash files from stdin, so a Windows path with backslashes no longer makes GNU `sha256sum` prefix its output with `\` and fail the comparison (#795).
-- The musl aarch64 wheel job's `docker run` runs as the runner user, with `HOME` inside the workspace (#792 follow-up, #790): as root it left `dist/` unreadable to `upload-artifact` (run 46133250368).
+- `install_rustup.sh` and `wheel_job.sh` hash files from stdin, so a Windows path with backslashes no longer makes GNU `sha256sum` prefix its output with `\` and fail the comparison (#795, #797).
+- The musl aarch64 wheel job's `docker run` runs as the runner user, with `HOME` inside the workspace (#792 follow-up, #790, #798): as root it left `dist/` unreadable to `upload-artifact` (run 46133250368).
 - The Windows wheels leg no longer fails at checkout with "Filename too long" (#789): the W1 artifact of the pypi workflow's fixture tree is stored under a short directory name, which the tests rename back to the real artifact name, and a test keeps every tracked path at 200 characters or less.
 - The musl aarch64 wheel job runs without a job container (#790, #792): GitHub's runner refuses JavaScript actions such as checkout in an Alpine container on arm64, so checkout and upload run on the hosted runner and `scripts/wheel_job.sh` runs in the same pinned musllinux_1_2 image through `docker run`.
 - The PGO decision's claim (`tools/pgo/decide.py`) names the measured platform, Linux x86-64 or Linux aarch64, from the host stamp's CPU model, instead of always "Linux x86-64"; a stamp without a CPU model is refused (#770, #784).
