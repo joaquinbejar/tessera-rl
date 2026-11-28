@@ -276,7 +276,7 @@ def test_wheels_w1_legs_are_x86_64_linux_and_both_aarch64_linux():
     # #770: the aarch64 glibc and musl legs ship W1; macOS stays W0 until its leg runs.
     w1 = {"linux"}
     for job in ("linux-aarch64", "musl-aarch64"):
-        run = re.search(r"run: (scripts/wheel_job.sh .*)", _job(job)).group(1).split()
+        run = re.search(r"(scripts/wheel_job.sh .*)", _job(job)).group(1).split()
         assert run[-1] == "wheel", job
         assert re.search(r"^    name: W1 \(aarch64-unknown-linux-(gnu|musl)\)$", _job(job), re.M), job
         assert "determinism-w0.json" in _job(job) and "compare.json" in _job(job), job
@@ -285,3 +285,16 @@ def test_wheels_w1_legs_are_x86_64_linux_and_both_aarch64_linux():
     for job in WHEEL_JOBS:
         if job not in w1:
             assert re.search(r"^    name: W0 \(", _job(job), re.M), job
+
+
+def test_wheels_musl_aarch64_runs_wheel_job_in_the_pinned_image_without_a_job_container():
+    # #790: JavaScript actions cannot run in an Alpine container on arm64, so
+    # checkout and upload run on the host and only wheel_job.sh is in the image.
+    job = _job("musl-aarch64")
+    assert "    container:" not in job
+    image = re.search(r"^      IMAGE: (\S+)$", job, re.M).group(1)
+    assert re.fullmatch(r"quay.io/pypa/musllinux_1_2_aarch64@sha256:[0-9a-f]{64}", image)
+    run = re.search(r"^      - run: (docker run .*)$", job, re.M).group(1)
+    assert run.startswith('docker run --rm --init -e WHEEL_RUN=/work/.wheel-run -e WHEEL_COMMIT -e SOURCE_DATE_EPOCH ')
+    assert '-v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" bash scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 ' in run
+    assert job.index("actions/checkout@") < job.index("- run: docker run") < job.index("actions/upload-artifact@")
